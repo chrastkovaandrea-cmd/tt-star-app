@@ -19,13 +19,13 @@ def save():
 st.title("🏓 TT STAR PRO MODEL")
 
 # =========================
-# ADD FULL MATCH TRAINING
+# ADD MATCH TRAINING
 # =========================
 
 st.subheader("📥 Add training match")
 
 block=st.text_area(
-"Paste match like:",
+"Paste match:",
 """Novák vs Černý
 1.66 vs 1.89
 3:1
@@ -55,13 +55,21 @@ if st.button("Save match"):
 
             a,b=s.split(":")
 
+            first_point="A" if int(a)>0 else "B"
+            last_point="A" if int(a)>int(b) else "B"
+
+            parity="even" if (int(a)+int(b))%2==0 else "odd"
+
             data.append({
                 "A":A,
                 "B":B,
                 "score":f"{a}:{b}",
                 "points":int(a)+int(b),
                 "diff":diff,
-                "sets":sets
+                "sets":sets,
+                "first_point":first_point,
+                "last_point":last_point,
+                "parity":parity
             })
 
         save()
@@ -73,7 +81,7 @@ if st.button("Save match"):
         st.error("Format error")
 
 # =========================
-# PREDICTION
+# PLAYER INPUT
 # =========================
 
 st.subheader("📊 Prediction")
@@ -83,6 +91,10 @@ playerB=st.text_input("Player B")
 
 oddsA=st.number_input("Odds A",value=1.8)
 oddsB=st.number_input("Odds B",value=2.0)
+
+# =========================
+# SCORE MODEL
+# =========================
 
 def score_model(A,B):
 
@@ -107,7 +119,56 @@ if len(model)>0:
         st.write(s,"→",round(prob*100,1),"%")
 
 # =========================
-# OVER UNDER
+# FIRST POINT MODEL
+# =========================
+
+first_points=[x["first_point"] for x in data
+if x["A"]==playerA or x["B"]==playerA
+or x["A"]==playerB or x["B"]==playerB]
+
+if len(first_points)>10:
+
+    pA=first_points.count("A")/len(first_points)
+
+    st.subheader("🎯 First point probability")
+
+    st.write(playerA,"→",round(pA*100,1),"%")
+    st.write(playerB,"→",round((1-pA)*100,1),"%")
+
+# =========================
+# LAST POINT MODEL (11th)
+# =========================
+
+last_points=[x["last_point"] for x in data
+if x["A"]==playerA or x["B"]==playerA
+or x["A"]==playerB or x["B"]==playerB]
+
+if len(last_points)>10:
+
+    pA=last_points.count("A")/len(last_points)
+
+    st.subheader("🏁 Last point probability")
+
+    st.write(playerA,"→",round(pA*100,1),"%")
+    st.write(playerB,"→",round((1-pA)*100,1),"%")
+
+# =========================
+# EVEN / ODD MODEL
+# =========================
+
+parity=[x["parity"] for x in data]
+
+if len(parity)>10:
+
+    even=parity.count("even")/len(parity)
+
+    st.subheader("⚖️ Even / Odd total points")
+
+    st.write("Even →",round(even*100,1),"%")
+    st.write("Odd →",round((1-even)*100,1),"%")
+
+# =========================
+# OVER / UNDER MODEL
 # =========================
 
 points=[x["points"] for x in data]
@@ -138,7 +199,7 @@ st.subheader("💰 EV")
 st.write("EV:",round(ev,3))
 
 # =========================
-# DATA SIZE INFO
+# DATA INFO
 # =========================
 
 st.write("Stored sets:",len(data))
