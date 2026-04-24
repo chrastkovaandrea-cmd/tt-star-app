@@ -28,7 +28,5 @@ def prob(a,b):
 pA = prob(oddsA, oddsB)
 
 diff = st.session_state.A - st.session_state.B
-live = max(0.05, min(0.95, pA + diff*0.03))
-
-st.write("📊 Live P(A):", round(live*100,1), "%")
-st.write("📊 Live P(B):", round((1-live)*100,1), "%")
+live = max(
+    
