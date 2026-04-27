@@ -49,8 +49,7 @@ def ocr_space(image_file):
     )
 
     result = response.json()
-
-    try:
+except
         return result["ParsedResults"][0]["ParsedText"]
     if uploaded_file is not None:
 
