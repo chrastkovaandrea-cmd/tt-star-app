@@ -12,14 +12,15 @@ K_FACTOR = 32
 
 def normalize_name(name):
     if not name: return ""
-    # Odstraní diakritiku, převede na velké a smaže iniciály (Mi.Beneš -> BENES)
     name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
     name = re.sub(r'^[A-Z][a-z]?\.', '', name) 
     return name.strip().upper()
 
 def load_data():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f: return json.load(f)
+        try:
+            with open(DATA_FILE, "r") as f: return json.load(f)
+        except: return []
     return []
 
 def save_data(data):
@@ -28,74 +29,36 @@ def save_data(data):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 2. SMART PARSER v9.1 (S automatickou detekcí směru a podání) ---
+# --- 2. SMART PARSER ---
 def parse_live_text(text):
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     if len(lines) < 2: return None
-
-    # Jména hráčů (první dva řádky)
     pA_name = normalize_name(lines[0])
     pB_name = normalize_name(lines[1])
-
-    # Detekce podání z textu (např. "první podání Mi.Beneš")
-    detected_starter = "A" # Default
+    detected_starter = "A"
     serve_match = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text)
     if serve_match:
         found_name = normalize_name(serve_match.group(1))
-        # Pokud se nalezené jméno u podání shoduje s Hráčem B
         if found_name in pB_name or pB_name in found_name:
             detected_starter = "B"
-        else:
-            detected_starter = "A"
-
-    # Extrakce bodů (hledá X : Y)
     all_scores = re.findall(r'(\d+)\s*:\s*(\d+)', text)
     if not all_scores: return None
-
     points = [(int(a), int(b)) for a, b in all_scores]
-
-    # --- INTELIGENTNÍ DETEKCE SMĚRU ---
-    # Podíváme se na první a poslední nalezené skóre, abychom věděli, jestli se kopírovalo od konce
-    first_p = points[0]
-    last_p = points[-1]
-    
-    # Pokud má první skóre vyšší součet než poslední, jde to od konce -> otočíme chronologicky
-    if (first_p[0] + first_p[1]) > (last_p[0] + last_p[1]):
+    if (points[0][0] + points[0][1]) > (points[-1][0] + points[-1][1]):
         points.reverse()
-
-    # Rekonstrukce sekvence bod po bodu
     sequence = []
     last_a, last_b = 0, 0
     unique_points = []
-    
     for p in points:
-        # Odstranění duplicit (pokud je skóre v textu víckrát pod sebou)
         if not unique_points or p != unique_points[-1]:
-            # Ochrana: Ignorujeme "setové" stavy jako 1:1, pokud už jsme uprostřed bodové série
             if len(unique_points) > 0:
-                current_sum = p[0] + p[1]
-                last_sum = unique_points[-1][0] + unique_points[-1][1]
-                if current_sum < last_sum:
-                    continue # Přeskočíme nesmyslně malé skóre (pravděpodobně stav setů)
-            
+                if (p[0] + p[1]) < (unique_points[-1][0] + unique_points[-1][1]): continue
             unique_points.append(p)
-
-    # Převod skóre na sekvenci (A/B)
     for a, b in unique_points:
-        if a > last_a: 
-            sequence.append("A")
-        elif b > last_b: 
-            sequence.append("B")
+        if a > last_a: sequence.append("A")
+        elif b > last_b: sequence.append("B")
         last_a, last_b = a, b
-
-    return {
-        "A": pA_name, 
-        "B": pB_name, 
-        "score": f"{last_a}:{last_b}", 
-        "win": 1 if last_a > last_b else 0, 
-        "sequence": sequence,
-        "starter": detected_starter
-    }
+    return {"A": pA_name, "B": pB_name, "score": f"{last_a}:{last_b}", "win": 1 if last_a > last_b else 0, "sequence": sequence, "starter": detected_starter}
 
 def calculate_elos():
     elos = {}
@@ -111,71 +74,61 @@ def calculate_elos():
     return elos
 
 # --- 3. UI ---
-st.set_page_config(page_title="TT STAR ULTRA v9.1", layout="wide")
-st.title("🏓 TT STAR - AUTOMATIC ANALYZER v9.1")
+st.set_page_config(page_title="TT STAR ULTRA v9.2", layout="wide")
+st.title("🏓 TT STAR ANALYZER v9.2")
 
-tabs = st.tabs(["📥 Vložit data", "📊 Analýza", "🏆 Žebříček"])
+tabs = st.tabs(["📥 Vložit data", "📊 Analýza", "🏆 Žebříček", "🗑️ Správa dat"])
 
 with tabs[0]:
-    st.subheader("📋 Vložení textu (Tipsport / Live)")
-    st.info("Nyní můžete kopírovat text shora dolů i zdola nahoru. Model si pořadí bodů sám srovná.")
-    
-    raw_text = st.text_area("Vložte text zápasu sem:", height=300)
-    
+    st.subheader("📋 Vložení textu")
+    raw_text = st.text_area("Vložte text zápasu:", height=200)
     if st.button("🚀 Analyzovat a Uložit set"):
         if raw_text:
             result = parse_live_text(raw_text)
-            if result and len(result['sequence']) > 0:
-                new_entry = {
-                    "A": result["A"], "B": result["B"],
-                    "sequence": result["sequence"],
-                    "starter": result["starter"],
-                    "win": result["win"],
-                    "timestamp": str(datetime.datetime.now())
-                }
+            if result:
+                new_entry = {"id": str(datetime.datetime.now().timestamp()), "A": result["A"], "B": result["B"], "sequence": result["sequence"], "starter": result["starter"], "win": result["win"], "score": result["score"], "timestamp": str(datetime.datetime.now())}
                 st.session_state.data.append(new_entry)
                 save_data(st.session_state.data)
-                
-                st.success(f"✅ Set úspěšně uložen! {result['A']} vs {result['B']} ({result['score']})")
-                st.write(f"ℹ️ První podání (detekováno): **Hráč {result['starter']}**")
-                st.code(f"Sekvence bodů: {''.join(result['sequence'])}")
+                st.success(f"Uloženo: {result['A']} vs {result['B']} ({result['score']})")
                 st.balloons()
-            else:
-                st.error("❌ Nepodařilo se rozpoznat data. Zkontrolujte, zda jste zkopírovali jména i body.")
 
 with tabs[1]:
     st.subheader("🔎 Hledání Value Betu")
     elos = calculate_elos()
     c1, c2 = st.columns(2)
-    with c1:
-        target_A = st.text_input("Hráč A").upper()
-        odds_A = st.number_input("Kurz sázkovky na Hráče A", value=2.0, step=0.01)
-    with c2:
-        target_B = st.text_input("Hráč B").upper()
-    
+    with c1: target_A = st.text_input("Hráč A").upper(); odds_A = st.number_input("Kurz na A", value=2.0)
+    with c2: target_B = st.text_input("Hráč B").upper()
     if target_A and target_B:
-        eA = elos.get(target_A, BASE_ELO)
-        eB = elos.get(target_B, BASE_ELO)
+        eA, eB = elos.get(target_A, BASE_ELO), elos.get(target_B, BASE_ELO)
         prob_A = 1 / (1 + 10 ** ((eB - eA) / 400))
         fair_odds = 1 / prob_A
-        st.write(f"### Elo Rating: {int(eA)} vs {int(eB)}")
-        st.metric("Fair Kurz (Dle historie)", round(fair_odds, 2))
-        
+        st.write(f"### Elo: {int(eA)} vs {int(eB)} | Fair kurz: {round(fair_odds, 2)}")
         edge = (odds_A / fair_odds) - 1
-        if edge > 0.05: 
-            st.success(f"🔥 VALUE BET ZJIŠTĚN: +{round(edge*100, 1)}% na {target_A}")
-        else: 
-            st.warning(f"Edge: {round(edge*100, 1)}% (Sázka nemá hodnotu)")
+        if edge > 0.05: st.success(f"🔥 VALUE: +{round(edge*100, 1)}%")
 
 with tabs[2]:
-    st.subheader("🏆 Aktuální Elo Žebříček")
+    st.subheader("🏆 Žebříček")
     current_elos = calculate_elos()
-    if current_elos:
-        # Seřazení hráčů podle Elo bodů od nejvyššího
-        sorted_ranking = sorted(current_elos.items(), key=lambda x: x[1], reverse=True)
-        for r, (n, v) in enumerate(sorted_ranking):
-            st.write(f"{r+1}. **{n}** — {int(v)} Elo bodů")
+    for r, (n, v) in enumerate(sorted(current_elos.items(), key=lambda x: x[1], reverse=True)):
+        st.write(f"{r+1}. **{n}** — {int(v)} Elo")
+
+with tabs[3]:
+    st.subheader("📜 Historie a mazání")
+    if not st.session_state.data:
+        st.info("Žádná data k zobrazení.")
     else:
-        st.info("V databázi zatím nejsou žádná data.")
+        # Zobrazíme seznam od nejnovějšího
+        for i, entry in enumerate(reversed(st.session_state.data)):
+            real_index = len(st.session_state.data) - 1 - i
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.write(f"**{entry['A']}** vs **{entry['B']}** ({entry['score']})")
+            with col2:
+                st.write(f"{entry['timestamp'][:16]}")
+            with col3:
+                if st.button("Smazat", key=f"del_{real_index}"):
+                    st.session_state.data.pop(real_index)
+                    save_data(st.session_state.data)
+                    st.rerun() # Refresh stránky
 
 st.sidebar.write(f"Sety v paměti: {len(st.session_state.data)}")
