@@ -6,7 +6,8 @@ import re
 import datetime
 
 # --- 1. NASTAVENÍ A DATA ---
-DATA_FILE = "tt_star_ultra_v10.json"
+# Změněno zpět na v9, aby se načetla tvoje původní data
+DATA_FILE = "tt_star_ultra_v9.json" 
 BASE_ELO = 1500
 K_FACTOR = 32
 SERVE_ADVANTAGE = 0.04
@@ -75,7 +76,6 @@ def parse_live_text(text):
     pts = [(int(a), int(b)) for a, b in scores]
     if (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): pts.reverse()
     
-    # Detekce podání z textu
     starter = "A"
     serve_info = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
     if serve_info:
@@ -85,8 +85,8 @@ def parse_live_text(text):
     return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}", "win": 1 if pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v10.0", layout="wide")
-st.title("🏓 TT STAR - VŠEUMĚL v10.0")
+st.set_page_config(page_title="TT STAR v10.1", layout="wide")
+st.title("🏓 TT STAR - VŠEUMĚL v10.1")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Správa"])
 
@@ -105,32 +105,28 @@ with t1:
             new_e = {"id": str(datetime.datetime.now().timestamp()), "A": res["A"], "B": res["B"], "score": res["score"], "win": res["win"], "starter": manual_starter, "set_num": manual_set, "timestamp": str(datetime.datetime.now())}
             st.session_state.data.append(new_e)
             save_data(st.session_state.data)
-            st.success(f"Uloženo: {res['A']} vs {res['B']} | Set {manual_set} | Podání: {manual_starter}")
+            st.success(f"Uloženo: {res['A']} vs {res['B']} | Set {manual_set}")
 
 with t2:
-    st.subheader("🔮 Predikce příštího setu")
+    st.subheader("🔮 Predikce")
     elos = calculate_elos()
     c1, c2, c3 = st.columns(3)
     with c1: pA = st.text_input("Hráč A").upper()
     with c2: pB = st.text_input("Hráč B").upper()
     with c3:
-        # Dopočet podání
-        relevant = [d for d in st.session_state.data if (d['A']==pA and d['B']==pB) or (d['A']==pB and d['B']==pA)]
         suggested = "A"
+        relevant = [d for d in st.session_state.data if (d['A']==pA and d['B']==pB) or (d['A']==pB and d['B']==pA)]
         if relevant:
             last_s = sorted(relevant, key=lambda x: x['set_num'])[-1]
             next_s_num = last_s['set_num'] + 1
-            # Pokud víme, kdo podával v 1. setu
             f_set = next((s for s in sorted(relevant, key=lambda x: x['set_num']) if s['set_num']==1), last_s)
             f_start = f_set['starter'] if f_set['A'] == pA else ("B" if f_set['starter']=="A" else "A")
             suggested = f_start if next_s_num % 2 == 1 else ("B" if f_start == "A" else "A")
-        
         final_s = st.radio("Podává v tomto setu:", ["A", "B"], index=0 if suggested=="A" else 1)
 
     if pA and pB:
         s = predict_stats(elos.get(pA, BASE_ELO), elos.get(pB, BASE_ELO), final_s)
-        st.metric(f"Šance {pA}", f"{round(s['probA']*100)}%")
-        st.metric(f"Šance {pB}", f"{round(s['probB']*100)}%")
+        st.write(f"Šance {pA}: **{round(s['probA']*100)}%** | Šance {pB}: **{round(s['probB']*100)}%**")
 
 with t3:
     elostats = calculate_elos()
@@ -138,20 +134,25 @@ with t3:
         st.write(f"{r+1}. **{n}** — {int(v)}")
 
 with t4:
-    st.subheader("⚙️ Správa a Editace historie")
+    st.subheader("⚙️ Správa dat")
+    
+    if st.button("⚠️ SMAZAT CELOU DATABÁZI"):
+        st.session_state.data = []
+        save_data([])
+        st.rerun()
+        
+    st.divider()
     for i in range(len(st.session_state.data)-1, -1, -1):
         d = st.session_state.data[i]
-        with st.expander(f"{d['A']} vs {d['B']} ({d['score']}) - Set {d['set_num']}"):
-            new_score = st.text_input("Skóre", d['score'], key=f"sc_{i}")
-            new_starter = st.selectbox("Podával", ["A", "B"], index=0 if d['starter']=="A" else 1, key=f"st_{i}")
+        with st.expander(f"{d['A']} {d['score']} {d['B']} (Set {d['set_num']})"):
             c_ed1, c_ed2 = st.columns(2)
-            if c_ed1.button("💾 Uložit změny", key=f"save_{i}"):
-                st.session_state.data[i]['score'] = new_score
-                st.session_state.data[i]['starter'] = new_starter
-                st.session_state.data[i]['win'] = 1 if int(new_score.split(':')[0]) > int(new_score.split(':')[1]) else 0
+            # Editace podání přímo v expanderu
+            new_st = st.selectbox("Změnit podávajícího:", ["A", "B"], index=0 if d['starter']=="A" else 1, key=f"edit_st_{i}")
+            if st.button("💾 Uložit změnu podání", key=f"btn_st_{i}"):
+                st.session_state.data[i]['starter'] = new_st
                 save_data(st.session_state.data)
                 st.rerun()
-            if c_ed2.button("🗑️ Smazat", key=f"del_{i}"):
+            if st.button("🗑️ Smazat tento záznam", key=f"del_single_{i}"):
                 st.session_state.data.pop(i)
                 save_data(st.session_state.data)
                 st.rerun()
