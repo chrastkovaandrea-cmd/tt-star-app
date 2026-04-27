@@ -9,7 +9,7 @@ import datetime
 DATA_FILE = "tt_star_ultra_v9.json"
 BASE_ELO = 1500
 K_FACTOR = 32
-SERVE_ADVANTAGE = 0.04  # Zvýšeno na 4% pro reálnější vliv podání
+SERVE_ADVANTAGE = 0.04  # 4% bonus pro hráče, který začíná set podáním
 
 def normalize_name(name):
     if not name: return ""
@@ -33,51 +33,64 @@ def save_data(data):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 2. LOGIKA PREDIKCE S VÁHOU PODÁNÍ ---
-def get_win_prob(eloA, eloB):
-    return 1 / (1 + 10 ** ((eloB - eloA) / 400))
+# --- 2. LOGIKA VÝPOČTŮ ---
+def calculate_elos():
+    elos = {}
+    for entry in st.session_state.data:
+        pA, pB = entry.get("A"), entry.get("B")
+        if not pA or not pB: continue
+        if pA not in elos: elos[pA] = BASE_ELO
+        if pB not in elos: elos[pB] = BASE_ELO
+        
+        exp_A = 1 / (1 + 10 ** ((elos[pB] - elos[pA]) / 400))
+        actual_A = entry.get("win", 0)
+        shift = K_FACTOR * (actual_A - exp_A)
+        elos[pA] += shift
+        elos[pB] -= shift
+    return elos
 
 def predict_stats(eloA, eloB, starter="A"):
-    pA_win_match = get_win_prob(eloA, eloB)
+    pA_win_match = 1 / (1 + 10 ** ((eloB - eloA) / 400))
     
-    # Aplikace výhody podání do výpočtu pravděpodobnosti
+    # Aplikace výhody podání
     if starter == "A":
         pA_win_match += SERVE_ADVANTAGE
     else:
         pA_win_match -= SERVE_ADVANTAGE
     
     pA_win_match = min(max(pA_win_match, 0.02), 0.98)
-    # Odhad pravděpodobnosti bodu
     pA_point = 0.5 + (pA_win_match - 0.5) * 0.15 
-    
     prob_over_18_5 = min(max((pA_point * (1-pA_point)) * 3.8, 0.25), 0.75)
 
     return {
         "probA": pA_win_match, "probB": 1 - pA_win_match,
         "over18_5": prob_over_18_5, "under18_5": 1 - prob_over_18_5,
-        "expected_score": "11:8" if pA_win_match > 0.55 else ("8:11" if pA_win_match < 0.45 else "11:9")
+        "expected_score": "11:9" if pA_win_match > 0.5 else "9:11"
     }
 
-# --- 3. SMART PARSER v9.9 (LOGIKA STŘÍDÁNÍ PODÁNÍ) ---
+# --- 3. SMART PARSER v9.9 ---
 def parse_live_text(text):
-    # Vyčištění řádků
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     
-    # Detekce čísla setu z textu (např. "1. SET" nebo "Konec 2. setu")
+    # Detekce čísla setu
     set_number = 1
-    set_match = re.search(r'(\d+)\.\s*set', text, re.IGNORECASE)
+    set_match = re.search(r'(\d+)\.\s*SET', text, re.IGNORECASE)
     if set_match:
         set_number = int(set_match.group(1))
 
-    # Základní filtrace balastu
-    forbidden = ["milestone-logo", "kurzy", "průběh", "statistiky", "tikety", "vítěz", "začátek zápasu"]
-    clean_lines = [l for l in lines if not any(f in l.lower() for f in forbidden) and not l.lower().startswith("konec")]
+    forbidden = ["milestone-logo", "kurzy", "průběh", "statistiky", "tikety", "vítěz", "začátek zápasu", "nejsázenější"]
+    clean_lines = []
+    for l in lines:
+        if any(f in l.lower() for f in forbidden): continue
+        if l.lower().startswith("konec"): continue
+        if l in [".", ":"]: continue
+        clean_lines.append(l)
 
     if len(clean_lines) < 2: return None
     pA_name = normalize_name(clean_lines[0])
     pB_name = normalize_name(clean_lines[1])
 
-    # Slepování skóre
+    # Slepování skóre a hledání bodů
     full_content = " ".join(clean_lines)
     full_content = re.sub(r'\s*:\s*', ':', full_content)
     all_scores = re.findall(r'(\d+):(\d+)', full_content)
@@ -87,31 +100,23 @@ def parse_live_text(text):
     if (points[0][0] + points[0][1]) > (points[-1][0] + points[-1][1]):
         points.reverse()
 
-    # --- LOGIKA PODÁNÍ ---
+    # Logika podání (hledání startéra)
     detected_starter = None
-    
-    # 1. Zkusíme najít informaci přímo v textu (typicky jen 1. set)
     serve_info = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
     if serve_info:
         found_name = normalize_name(serve_info.group(1))
         detected_starter = "B" if (found_name in pB_name or pB_name in found_name) else "A"
     
-    # 2. Pokud v textu info není, podíváme se do historie na tento zápas
+    # Automatické střídání podle historie zápasu
     if not detected_starter:
         match_history = [d for d in st.session_state.data if (d['A'] == pA_name and d['B'] == pB_name)]
         if match_history:
-            # Najdeme 1. set tohoto zápasu
             first_set = next((s for s in match_history if s.get('set_num') == 1), match_history[0])
             first_starter = first_set['starter']
-            # Pravidlo střídání: Lichý set = stejný startér jako v 1. setu, Sudý set = opačný
-            if set_number % 2 == 1:
-                detected_starter = first_starter
-            else:
-                detected_starter = "B" if first_starter == "A" else "A"
+            detected_starter = first_starter if set_number % 2 == 1 else ("B" if first_starter == "A" else "A")
         else:
-            detected_starter = "A" # Default, pokud nemáme info
+            detected_starter = "A"
 
-    # Rekonstrukce sekvence
     sequence, last_a, last_b, unique_points = [], 0, 0, []
     for a, b in points:
         if unique_points and (a + b) <= (unique_points[-1][0] + unique_points[-1][1]) and (a+b) < 3: continue
@@ -129,14 +134,15 @@ def parse_live_text(text):
         "starter": detected_starter, "set_num": set_number
     }
 
-# --- 4. UI ---
+# --- 4. UI STREAMLIT ---
 st.set_page_config(page_title="TT STAR PREDICTOR v9.9", layout="wide")
 st.title("🏓 TT STAR - VŠEUMĚL v9.9")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit data", "🔮 PREDIKCE", "🏆 Žebříček", "🗑️ Správa"])
 
 with t1:
-    raw_input = st.text_area("Vložte data setu (z Tipsportu):", height=200)
+    st.subheader("📥 Vložení výsledků")
+    raw_input = st.text_area("Vložte text z Tipsportu:", height=200)
     if st.button("🚀 Analyzovat a uložit"):
         res = parse_live_text(raw_input)
         if res:
@@ -149,39 +155,49 @@ with t1:
             }
             st.session_state.data.append(new_entry)
             save_data(st.session_state.data)
-            st.success(f"Uložen {res['set_num']}. SET: {res['A']} vs {res['B']} ({res['score']}). Začínal podávat: {res['starter']}")
+            st.success(f"Uloženo! {res['set_num']}. set | Podával: {res['starter']}")
 
 with t2:
-    st.subheader("🔮 Predikce s vlivem podání")
-    elos = calculate_elos()
+    st.subheader("🔮 Predikce")
+    current_elos = calculate_elos()
     c1, c2, c3 = st.columns(3)
     with c1: pA = st.text_input("Hráč A").upper()
     with c2: pB = st.text_input("Hráč B").upper()
     with c3:
-        # Inteligentní předpověď podávajícího
-        current_set_guess = 1
+        # Odhad podávajícího
+        starter_guess = "A"
         relevant = [d for d in st.session_state.data if (d['A']==pA and d['B']==pB)]
         if relevant:
-            current_set_guess = max([d.get('set_num', 0) for d in relevant]) + 1
+            next_set = max([d.get('set_num', 0) for d in relevant]) + 1
+            first_s = next((s for s in relevant if s.get('set_num') == 1), relevant[0])
+            if next_set % 2 == 0: starter_guess = "B" if first_s['starter'] == "A" else "A"
+            else: starter_guess = first_s['starter']
         
-        st.write(f"Předpokládaný set: {current_set_guess}.")
-        # Výpočet kdo má podávat
-        starter_guess = "A"
-        if relevant:
-            first_set = next((s for s in relevant if s.get('set_num') == 1), relevant[0])
-            if current_set_guess % 2 == 0:
-                starter_guess = "B" if first_set['starter'] == "A" else "A"
-            else:
-                starter_guess = first_set['starter']
-        
-        final_starter = st.radio("Kdo bude v tomto setu podávat?", ["A", "B"], index=0 if starter_guess=="A" else 1)
+        final_starter = st.radio("Kdo bude podávat?", ["A", "B"], index=0 if starter_guess=="A" else 1)
 
     if pA and pB:
-        stats = predict_stats(elos.get(pA, BASE_ELO), elos.get(pB, BASE_ELO), final_starter)
+        stats = predict_stats(current_elos.get(pA, BASE_ELO), current_elos.get(pB, BASE_ELO), final_starter)
         st.divider()
-        col_a, col_b = st.columns(2)
-        col_a.metric(f"Šance {pA}", f"{round(stats['probA']*100)}%")
-        col_b.metric(f"Šance {pB}", f"{round(stats['probB']*100)}%")
-        st.warning(f"Doporučení: Sázet na **{pA if stats['probA'] > stats['probB'] else pB}** při kurzu vyšším než {round(1/max(stats['probA'], stats['probB']), 2)}")
+        col_res, col_odds = st.columns(2)
+        with col_res:
+            st.metric(f"Šance {pA}", f"{round(stats['probA']*100)}%")
+            st.metric(f"Šance {pB}", f"{round(stats['probB']*100)}%")
+        with col_odds:
+            st.write(f"Fair kurz na vítěze: **{round(1/max(stats['probA'], 0.01), 2)}**")
+            st.write(f"Pravděpodobnost Over 18.5: **{round(stats['over18_5']*100)}%**")
 
-# --- Ostatní funkce (calculate_elos atd.) jsou shodné jako v předchozí verzi ---
+with t3:
+    st.subheader("🏆 Žebříček")
+    active_elos = calculate_elos()
+    for r, (n, v) in enumerate(sorted(active_elos.items(), key=lambda x: x[1], reverse=True)):
+        st.write(f"{r+1}. **{n}** — {int(v)} Elo")
+
+with t4:
+    st.subheader("🗑️ Historie")
+    for i in range(len(st.session_state.data)-1, -1, -1):
+        d = st.session_state.data[i]
+        st.write(f"{d.get('A')} vs {d.get('B')} | {d.get('score')} | Set: {d.get('set_num')}")
+        if st.button("Smazat", key=f"del_{i}"):
+            st.session_state.data.pop(i)
+            save_data(st.session_state.data)
+            st.rerun()
