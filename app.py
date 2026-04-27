@@ -4,192 +4,125 @@ import json
 import os
 import requests
 import re
+import numpy as np
 from collections import Counter
 
-# --- KONFIGURACE ---
+# --- 1. ZÁKLADNÍ NASTAVENÍ A FUNKCE ---
 DATA_FILE = "data.json"
 
 def normalize_name(name):
     if not name: return ""
-    name = name.strip()
     name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
-    name = " ".join(name.split())
-    return name
+    return " ".join(name.strip().split())
 
 def load_data():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
+        with open(DATA_FILE, "r") as f: return json.load(f)
     return []
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+    with open(DATA_FILE, "w") as f: json.dump(data, f)
 
-# Inicializace dat v session_state, aby se stránka pořád neresetovala
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-st.title("🏓 TT STAR PRO MODEL")
+# --- 2. MONTE CARLO SIMULACE (Nové!) ---
+def monte_carlo_set_simulation(p_win_point, current_score=(0,0), iterations=2000):
+    a_wins = 0
+    simulated_scores = []
+    for _ in range(iterations):
+        s_a, s_b = current_score
+        while True:
+            if np.random.rand() < p_win_point: s_a += 1
+            else: s_b += 1
+            if (s_a >= 11 or s_b >= 11) and abs(s_a - s_b) >= 2: break
+        simulated_scores.append(f"{s_a}:{s_b}")
+        if s_a > s_b: a_wins += 1
+    return a_wins / iterations, Counter(simulated_scores)
 
-# --- OCR FUNKCE ---
+# --- 3. OCR A PARSOVÁNÍ ---
 def ocr_space(image_file):
-    api_key = "helloworld"  # Doporučuji získat vlastní klíč na ocr.space
-    payload = {
-        "apikey": api_key,
-        "language": "eng",
-        "isOverlayRequired": False,
-    }
-    res = requests.post("https://api.ocr.space/parse/image",
-                        files={"file": image_file},
-                        data=payload)
+    payload = {"apikey": "helloworld", "language": "eng"}
+    res = requests.post("https://api.ocr.space/parse/image", files={"file": image_file}, data=payload)
     result = res.json()
-    if result.get("ParsedResults"):
-        return result["ParsedResults"][0]["ParsedText"]
-    return ""
+    return result["ParsedResults"][0]["ParsedText"] if result.get("ParsedResults") else ""
 
-# --- PARSOVÁNÍ TIPSPORTU ---
-def parse_tipsport(text):
+def auto_parse_tipsport(text):
+    # Vylepšený regex pro automatické hledání zápasů
+    pattern = r"([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s?-\s?([A-Z][a-z]+(?:\s[A-Z][a-z]+)*).+?(\d:\d)\s?\(([\d:, ]+)\)"
+    found = re.findall(pattern, text, re.DOTALL)
     matches = []
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    
-    for i in range(len(lines)):
-        line = lines[i]
-        if " - " in line:
-            try:
-                players = line.split("-")
-                A = normalize_name(players[0])
-                B = normalize_name(players[1])
-
-                next_line = lines[i+1]
-                set_match = re.search(r"(\d):(\d)", next_line)
-                score_match = re.search(r"\((.*?)\)", next_line)
-
-                odds_line = lines[i+2]
-                odds = re.findall(r"\d+\.\d+", odds_line)
-
-                if set_match and score_match and len(odds) >= 2:
-                    matches.append({
-                        "A": A, "B": B,
-                        "sets": set_match.group(),
-                        "scores": score_match.group(1),
-                        "oddsA": float(odds[0]),
-                        "oddsB": float(odds[1])
-                    })
-            except Exception:
-                continue
+    for f in found:
+        matches.append({"A": normalize_name(f[0]), "B": normalize_name(f[1]), "sets": f[2], "scores": f[3]})
     return matches
 
-# --- UI: SCREENSHOT ---
-st.subheader("📸 Upload Tipsport screenshot")
-img_file = st.file_uploader("Upload image", type=["png", "jpg", "jpeg"])
+# --- 4. UI STREAMLIT ---
+st.title("🏓 TT STAR PRO MODEL v2.0")
 
-if img_file:
-    st.image(img_file, caption="Nahraný screenshot", width=300)
-    if st.button("🔍 Analyzovat fotku"):
-        with st.spinner("Čtu text z obrázku..."):
-            detected_text = ocr_space(img_file)
-            parsed_matches = parse_tipsport(detected_text)
-            
-            if parsed_matches:
-                st.session_state.temp_matches = parsed_matches
-                st.success(f"Nalezeno zápasů: {len(parsed_matches)}")
-            else:
-                st.error("Nepodařilo se rozpoznat žádné zápasy. Zkuste lepší kvalitu.")
+tabs = st.tabs(["📸 Nahrát data", "📊 Predikce", "⚡ Live Betting"])
 
-if 'temp_matches' in st.session_state:
-    for idx, m in enumerate(st.session_state.temp_matches):
-        st.write(f"**{m['A']} vs {m['B']}** ({m['sets']})")
+# TAB 1: Nahrávání
+with tabs[0]:
+    img_file = st.file_uploader("Nahrát Tipsport screenshot", type=["png", "jpg", "jpeg"])
+    if img_file:
+        if st.button("🔍 Automaticky analyzovat"):
+            text = ocr_space(img_file)
+            parsed = auto_parse_tipsport(text)
+            if parsed:
+                st.session_state.temp_matches = parsed
+                st.success(f"Nalezeno {len(parsed)} zápasů!")
+            else: st.error("Nic nenalezeno. Zkus jiný screenshot.")
     
-    if st.button("💾 Uložit vše do modelu"):
+    if 'temp_matches' in st.session_state:
         for m in st.session_state.temp_matches:
-            diff = abs(m["oddsA"] - m["oddsB"])
-            for s in m["scores"].split(","):
-                try:
-                    a, b = s.strip().split(":")
-                    st.session_state.data.append({
-                        "A": m["A"], "B": m["B"],
-                        "score": f"{a}:{b}",
-                        "points": int(a) + int(b),
-                        "diff": diff,
-                        "sets": m["sets"],
-                        "first_point": "A" if int(a) > 0 else "B", # Zjednodušená logika
-                        "last_point": "A" if int(a) > int(b) else "B",
-                        "parity": "even" if (int(a)+int(b)) % 2 == 0 else "odd"
-                    })
-                except: continue
-        save_data(st.session_state.data)
-        st.success("Data uložena!")
-        del st.session_state.temp_matches
+            st.write(f"Zápas: {m['A']} - {m['B']} ({m['sets']})")
+        if st.button("💾 Uložit vše do databáze"):
+            for m in st.session_state.temp_matches:
+                for s in m["scores"].split(","):
+                    try:
+                        a, b = s.strip().split(":")
+                        st.session_state.data.append({
+                            "A": m["A"], "B": m["B"], "score": f"{a}:{b}",
+                            "points": int(a)+int(b), "win": 1 if int(a)>int(b) else 0
+                        })
+                    except: pass
+            save_data(st.session_state.data)
+            st.success("Uloženo!")
 
-st.divider()
+# TAB 2: Predikce před zápasem
+with tabs[1]:
+    st.subheader("Modelová predikce")
+    pA = st.text_input("Hráč A (Jméno)")
+    pB = st.text_input("Hráč B (Jméno)")
+    
+    if pA and pB:
+        # Výpočet síly hráče z dat
+        history = [x for x in st.session_state.data if x["A"] == normalize_name(pA) or x["B"] == normalize_name(pA)]
+        if len(history) > 0:
+            win_rate = sum([1 for x in history if x["win"] == 1]) / len(history)
+            st.info(f"Historická úspěšnost setů {pA}: {round(win_rate*100, 1)}%")
+            # Odhad pravděpodobnosti bodu (zjednodušeně)
+            p_point = 0.45 + (win_rate * 0.1) 
+        else:
+            p_point = 0.50
+            st.warning("Hráč nenalezen, používám neutrální kurz 50/50")
 
-# --- UI: RUČNÍ PŘIDÁNÍ ---
-st.subheader("📥 Add training match manually")
-block = st.text_area("Vložte text (Hráč vs Hráč / Kurzy / Skóre):", 
-                   "Novák vs Černý\n1.66 vs 1.89\n3:1\n11:9,10:12,11:8,11:7")
+        win_p, scores = monte_carlo_set_simulation(p_point)
+        st.metric("Šance na výhru setu", f"{round(win_p*100, 1)}%")
 
-if st.button("Save manual match"):
-    try:
-        lines = block.strip().split("\n")
-        A, B = lines[0].split("vs")
-        oA, oB = lines[1].split("vs")
-        sets = lines[2]
-        scores = lines[3]
-
-        diff = abs(float(oA) - float(oB))
-        for s in scores.split(","):
-            a, b = s.strip().split(":")
-            st.session_state.data.append({
-                "A": normalize_name(A), "B": normalize_name(B),
-                "score": f"{a}:{b}", "points": int(a)+int(b),
-                "diff": diff, "sets": sets,
-                "first_point": "A" if int(a) > int(b) else "B", # Příklad logiky
-                "last_point": "A" if int(a) > int(b) else "B",
-                "parity": "even" if (int(a)+int(b))%2==0 else "odd"
-            })
-        save_data(st.session_state.data)
-        st.success("Zápas uložen!")
-    except Exception as e:
-        st.error(f"Chyba formátu: {e}")
-
-st.divider()
-
-# --- UI: PREDIKCE ---
-st.header("📊 Prediction Engine")
-if len(st.session_state.data) < 5:
-    st.info(f"Máš uloženo {len(st.session_state.data)} setů. Potřebuješ jich víc pro analýzu.")
-else:
-    col1, col2 = st.columns(2)
-    with col1:
-        pA_input = st.text_input("Hráč A")
-        oA_input = st.number_input("Kurz A", value=1.8)
-    with col2:
-        pB_input = st.text_input("Hráč B")
-        oB_input = st.number_input("Kurz B", value=1.8)
-
-    if st.button("🔮 Spočítat predikci"):
-        A_norm = normalize_name(pA_input)
-        B_norm = normalize_name(pB_input)
+# TAB 3: LIVE BETTING
+with tabs[2]:
+    st.subheader("Point-by-Point simulace")
+    l_a = st.number_input("Aktuální body A", value=0)
+    l_b = st.number_input("Aktuální body B", value=0)
+    strength = st.slider("Relativní síla A vs B", 0.40, 0.60, 0.50, 0.01)
+    
+    if st.button("🔮 Vypočítat Live šance"):
+        win_p, scores = monte_carlo_set_simulation(strength, (l_a, l_b))
+        st.write(f"### Aktuální šance na zisk setu: {round(win_p*100, 1)}%")
         
-        # Filtrování dat
-        relevant = [x for x in st.session_state.data if x["A"] == A_norm or x["B"] == A_norm or x["A"] == B_norm or x["B"] == B_norm]
-        
-        if not relevant:
-            st.warning("Tito hráči v databázi ještě nejsou. Používám globální data.")
-            relevant = st.session_state.data
+        st.write("**Pravděpodobné výsledky:**")
+        for s, c in scores.most_common(3):
+            st.write(f"{s} (šance {round((c/2000)*100, 1)}%)")
 
-        scores = [x["score"] for x in relevant]
-        counts = Counter(scores)
-        total = sum(counts.values())
-
-        st.subheader("Pravděpodobnosti setů")
-        for s, c in counts.most_common(5):
-            st.write(f"**{s}** : {round((c/total)*100, 1)}%")
-
-        # Over / Under
-        line = 18.5
-        over = sum(1 for x in relevant if x["points"] > line) / len(relevant)
-        st.metric("Over 18.5", f"{round(over*100, 1)}%")
-
-st.sidebar.write(f"Databáze obsahuje: {len(st.session_state.data)} setů")
+st.sidebar.write(f"Celkem setů v modelu: {len(st.session_state.data)}")
