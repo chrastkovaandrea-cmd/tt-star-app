@@ -84,8 +84,8 @@ def parse_live_text(text):
     return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}", "win": 1 if pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v10.3", layout="wide")
-st.title("🏓 TT STAR - VŠEUMĚL v10.3")
+st.set_page_config(page_title="TT STAR v10.4", layout="wide")
+st.title("🏓 TT STAR - VŠEUMĚL v10.4")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie"])
 
@@ -113,7 +113,6 @@ with t2:
     with c1: pA_in = st.text_input("Hráč A").upper()
     with c2: pB_in = st.text_input("Hráč B").upper()
     with c3:
-        # Odhad podávajícího podle historie
         relevant = [d for d in st.session_state.data if (d.get('A')==pA_in and d.get('B')==pB_in) or (d.get('A')==pB_in and d.get('B')==pA_in)]
         suggested = "A"
         if relevant:
@@ -123,7 +122,6 @@ with t2:
             f_start = f_set.get('starter', "A")
             if f_set.get('A') != pA_in: f_start = "B" if f_start == "A" else "A"
             suggested = f_start if next_s_num % 2 == 1 else ("B" if f_start == "A" else "A")
-        
         final_s = st.radio("Podává v tomto setu:", ["A", "B"], index=0 if suggested=="A" else 1)
 
     if pA_in and pB_in:
@@ -139,18 +137,29 @@ with t4:
     st.subheader("⚙️ Správa Historie")
     for i in range(len(st.session_state.data)-1, -1, -1):
         d = st.session_state.data[i]
-        # Bezpečné načtení hodnot, aby to neházelo KeyError
-        name_A = d.get('A', 'Neznámý')
-        name_B = d.get('B', 'Neznámý')
-        score = d.get('score', '?:?')
-        s_num = d.get('set_num', '?')
-        starter = d.get('starter', '?')
         
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            st.write(f"**{name_A}** {score} **{name_B}** (Set: {s_num}, Podával: {starter})")
-        with col2:
-            if st.button("Smazat", key=f"del_{i}"):
-                st.session_state.data.pop(i)
-                save_data(st.session_state.data)
-                st.rerun()
+        # Bezpečné načtení
+        name_A, name_B = d.get('A', 'Neznámý'), d.get('B', 'Neznámý')
+        score, s_num, starter = d.get('score', '0:0'), d.get('set_num', 1), d.get('starter', 'A')
+
+        with st.expander(f"📝 {name_A} vs {name_B} ({score}) | Set: {s_num}"):
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                edit_score = st.text_input("Upravit skóre", score, key=f"edit_sc_{i}")
+                edit_starter = st.selectbox("Upravit podání", ["A", "B"], index=0 if starter=="A" else 1, key=f"edit_st_{i}")
+            with col_e2:
+                if st.button("💾 Uložit změny", key=f"save_btn_{i}"):
+                    st.session_state.data[i]['score'] = edit_score
+                    st.session_state.data[i]['starter'] = edit_starter
+                    # Přepočet vítěze při změně skóre
+                    try:
+                        sa, sb = map(int, edit_score.split(':'))
+                        st.session_state.data[i]['win'] = 1 if sa > sb else 0
+                    except: pass
+                    save_data(st.session_state.data)
+                    st.rerun()
+                
+                if st.button("🗑️ Smazat záznam", key=f"del_btn_{i}"):
+                    st.session_state.data.pop(i)
+                    save_data(st.session_state.data)
+                    st.rerun()
