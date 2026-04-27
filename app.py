@@ -15,7 +15,8 @@ def normalize_name(name):
     if not name: return ""
     name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
     name = re.sub(r'^[.\s]+', '', name)
-    name = re.sub(r'^[A-Z][a-z]?\.\s*', '', name) 
+    # Odstraní jen osamocené iniciály, ponechá celá jména
+    name = re.sub(r'^[A-Z]\.\s+', '', name) 
     return name.strip().upper()
 
 def load_data():
@@ -28,9 +29,6 @@ def load_data():
     return []
 
 def save_data(data):
-    # Ochrana: Nikdy neukládat, pokud jsou data prázdná a v session_state něco bylo
-    if not data and st.session_state.get('data'):
-        return
     with open(DATA_FILE, "w") as f: 
         json.dump(data, f)
 
@@ -52,10 +50,10 @@ def calculate_elos():
         elos[pB] -= shift
     return elos
 
-# --- 3. PARSER (Slepuje i rozházené skóre) ---
+# --- 3. PARSER ---
 def parse_live_text(text):
     text = re.sub(r'milestone-logo|Domů|Kurzy|Live|Soutěže|Komunita|Analýzy|Statistiky|Tikety', '', text, flags=re.IGNORECASE)
-    # Slepí rozházené skóre 11 : 6
+    # Slepí rozbité skóre (řeší i více řádků mezi čísly)
     text = re.sub(r'(\d+)\s*\n*\s*[:]\s*\n*\s*(\d+)', r'\1:\2', text)
     
     lines = [l.strip() for l in text.split('\n') if l.strip()]
@@ -63,27 +61,30 @@ def parse_live_text(text):
     s_match = re.search(r'(\d+)\.\s*set', text, re.IGNORECASE)
     if s_match: set_num = int(s_match.group(1))
 
+    # Hledáme jména (ignorujeme balast)
     potential_names = []
-    ignored = ["STOLNÍ TENIS", "VÝSLEDKY", "TIKETY", "KURZ", "PRŮBĚH", "DOBA PŘIHLÁŠENÍ"]
+    ignored = ["STOLNÍ TENIS", "VÝSLEDKY", "TIKETY", "KURZ", "PRŮBĚH", "DOBA PŘIHLÁŠENÍ", "VÍTĚZ", "ZAČÁTEK ZÁPASU", "KONEC ZÁPASU"]
     for l in lines:
-        if len(l) > 3 and not any(ig in l.upper() for ig in ignored) and not re.search(r'\d+:\d+', l):
+        l_up = l.upper()
+        if len(l) > 3 and not any(ig in l_up for ig in ignored) and not re.search(r'\d+:\d+', l):
             potential_names.append(normalize_name(l))
     
     if len(potential_names) < 2: return None
     pA, pB = potential_names[0], potential_names[1]
 
+    # Hledání skóre (poslední nalezené je to aktuální)
     scores = re.findall(r'(\d+):(\d+)', text)
     if not scores: return None
     pts = [(int(a), int(b)) for a, b in scores]
     if (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): pts.reverse()
 
+    # Logika podání
     starter = "A"
     serve_info = re.search(r'první podání\s+([A-ZÁ-Ž][a-zá-ž]+)', text, re.IGNORECASE)
     if serve_info:
         found = normalize_name(serve_info.group(1))
         if found in pB or pB in found: starter = "B"
     else:
-        # Dopočet střídání podle historie
         relevant = [d for d in st.session_state.data if (d.get('A')==pA and d.get('B')==pB)]
         if relevant:
             f_set = next((s for s in sorted(relevant, key=lambda x: x.get('set_num', 1)) if s.get('set_num')==1), None)
@@ -94,24 +95,37 @@ def parse_live_text(text):
     return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}", "win": 1 if pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v10.8", layout="wide")
-st.title("🏓 TT STAR - VŠEUMĚL v10.8")
+st.set_page_config(page_title="TT STAR v10.9", layout="wide")
+st.title("🏓 TT STAR v10.9")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie"])
 
 with t1:
     raw_in = st.text_area("Vložte text z Tipsportu:", height=200)
     res = parse_live_text(raw_in) if raw_in else None
+    
     if res:
-        st.success(f"✅ {res['A']} vs {res['B']}")
-        c1, c2 = st.columns(2)
-        with c1: m_set = st.number_input("Set:", 1, 5, value=res['set_num'])
-        with c2: m_start = st.selectbox("Podával:", ["A", "B"], index=0 if res['starter']=="A" else 1)
-        if st.button("🚀 ULOŽIT ZÁPIS"):
-            new_e = {"id": str(datetime.datetime.now().timestamp()), "A": res["A"], "B": res["B"], "score": res["score"], "win": res["win"], "starter": m_start, "set_num": m_set}
-            st.session_state.data.append(new_e)
-            save_data(st.session_state.data)
-            st.rerun()
+        st.success(f"✅ Rozpoznáno: {res['A']} vs {res['B']}")
+        # FORMULÁŘ PRO STABILNÍ ULOŽENÍ
+        with st.form("save_form"):
+            st.write(f"Skóre: {res['score']}")
+            m_set = st.number_input("Číslo setu:", 1, 5, value=res['set_num'])
+            m_start = st.selectbox("Podával v tomto setu:", ["A", "B"], index=0 if res['starter']=="A" else 1)
+            
+            submit = st.form_submit_button("🚀 POTVRDIT A ULOŽIT")
+            if submit:
+                new_e = {
+                    "id": str(datetime.datetime.now().timestamp()),
+                    "A": res["A"], "B": res["B"], 
+                    "score": res["score"], "win": res["win"], 
+                    "starter": m_start, "set_num": m_set
+                }
+                st.session_state.data.append(new_e)
+                save_data(st.session_state.data)
+                st.info("Zápis uložen. Aplikace se obnovuje...")
+                st.rerun()
+    elif raw_in:
+        st.error("Nepodařilo se detekovat data. Zkuste zkopírovat text znovu.")
 
 with t2:
     st.subheader("🔮 Predikce")
@@ -119,9 +133,10 @@ with t2:
     pA_p = st.text_input("Hráč A").upper()
     pB_p = st.text_input("Hráč B").upper()
     if pA_p and pB_p:
-        # Tady model využívá váhu podání
-        starter_p = st.radio("Kdo začíná podávat v tomto setu?", ["A", "B"])
-        pA_win = 1 / (1 + 10 ** ((current_elos.get(pB_p, 1500) - current_elos.get(pA_p, 1500)) / 400))
+        starter_p = st.radio("Podává v aktuálním setu:", ["A", "B"])
+        eloA = current_elos.get(pA_p, BASE_ELO)
+        eloB = current_elos.get(pB_p, BASE_ELO)
+        pA_win = 1 / (1 + 10 ** ((eloB - eloA) / 400))
         pA_win = pA_win + SERVE_ADVANTAGE if starter_p == "A" else pA_win - SERVE_ADVANTAGE
         st.metric(f"Šance {pA_p}", f"{round(pA_win*100)}%")
         st.metric(f"Šance {pB_p}", f"{round((1-pA_win)*100)}%")
@@ -132,19 +147,14 @@ with t3:
         st.write(f"{r+1}. **{n}** — {int(v)} Elo")
 
 with t4:
-    st.subheader("⚙️ Správa a Úpravy")
+    st.subheader("⚙️ Správa Historie")
     for i in range(len(st.session_state.data)-1, -1, -1):
         d = st.session_state.data[i]
         with st.expander(f"📝 {d.get('A')} vs {d.get('B')} (Set {d.get('set_num')})"):
-            ed_sc = st.text_input("Skóre", d.get('score'), key=f"sc_{i}")
-            ed_set = st.number_input("Set", 1, 5, value=d.get('set_num'), key=f"set_{i}")
-            ed_st = st.selectbox("Podával", ["A", "B"], index=0 if d.get('starter')=="A" else 1, key=f"st_{i}")
-            col_b1, col_b2 = st.columns(2)
-            if col_b1.button("💾 Uložit změny", key=f"sv_{i}"):
-                st.session_state.data[i].update({"score": ed_sc, "set_num": ed_set, "starter": ed_st})
-                save_data(st.session_state.data)
-                st.rerun()
-            if col_b2.button("🗑️ Smazat", key=f"del_{i}"):
-                st.session_state.data.pop(i)
-                save_data(st.session_state.data)
-                st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                ed_sc = st.text_input("Skóre", d.get('score'), key=f"sc_{i}")
+                ed_st = st.selectbox("Podával", ["A", "B"], index=0 if d.get('starter')=="A" else 1, key=f"st_{i}")
+            with col2:
+                if st.button("💾 Uložit", key=f"sv_{i}"):
+                    st.session_state.data[i].update({"
