@@ -17,7 +17,111 @@ def save():
         json.dump(data,f)
 
 st.title("🏓 TT STAR PRO MODEL")
+import pytesseract
+from PIL import Image
+import re
+import numpy as np
 
+st.subheader("📸 Upload Tipsport results screenshot")
+
+img_file = st.file_uploader("Upload screenshot", type=["png","jpg","jpeg"])
+
+def parse_tipsport_text(text):
+
+    matches = []
+
+    lines = text.split("\n")
+
+    for i in range(len(lines)):
+
+        line = lines[i]
+
+        # hledání hráčů
+        if " - " in line:
+
+            try:
+                players = line.split("-")
+                A = players[0].strip()
+                B = players[1].strip()
+
+                # další řádek obsahuje výsledek
+                next_line = lines[i+1]
+
+                # najdi sety (např 3:1)
+                set_match = re.search(r"\d:\d", next_line)
+
+                # najdi skóre setů
+                score_match = re.search(r"\((.*?)\)", next_line)
+
+                # najdi kurzy (o řádek níž)
+                odds_line = lines[i+2]
+
+                odds = re.findall(r"\d+\.\d+", odds_line)
+
+                if set_match and score_match and len(odds)>=2:
+
+                    sets = set_match.group()
+                    scores = score_match.group(1)
+
+                    oddsA = float(odds[0])
+                    oddsB = float(odds[1])
+
+                    matches.append({
+                        "A":A,
+                        "B":B,
+                        "sets":sets,
+                        "scores":scores,
+                        "oddsA":oddsA,
+                        "oddsB":oddsB
+                    })
+
+            except:
+                pass
+
+    return matches
+
+
+if img_file:
+
+    image = Image.open(img_file)
+
+    text = pytesseract.image_to_string(image)
+
+    st.text("Detected text:")
+    st.text(text[:1000])
+
+    parsed = parse_tipsport_text(text)
+
+    if len(parsed)>0:
+
+        st.success(f"Detected {len(parsed)} matches")
+
+        for m in parsed:
+
+            st.write(m)
+
+            diff = abs(m["oddsA"] - m["oddsB"])
+
+            for s in m["scores"].split(","):
+
+                a,b = s.strip().split(":")
+
+                data.append({
+                    "A":m["A"],
+                    "B":m["B"],
+                    "score":f"{a}:{b}",
+                    "points":int(a)+int(b),
+                    "diff":diff,
+                    "sets":m["sets"]
+                })
+
+        save()
+
+        st.success("✔ data saved from screenshot")
+
+    else:
+
+        st.error("No matches detected")
 # =========================
 # ADD MATCH TRAINING
 # =========================
