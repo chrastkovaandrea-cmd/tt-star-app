@@ -45,19 +45,16 @@ def calculate_elos():
         if pA not in elos: elos[pA] = BASE_ELO
         if pB not in elos: elos[pB] = BASE_ELO
         
-        # Získání bodů ze skóre (např. 11:5)
         try:
             ptsA, ptsB = map(int, score.split(':'))
             point_diff = abs(ptsA - ptsB)
         except:
-            point_diff = 2 # Defaultní minimální rozdíl
+            point_diff = 2
             
         exp_A = 1 / (1 + 10 ** ((elos[pB] - elos[pA]) / 400))
         actual_A = entry.get("win", 0)
         
-        # --- ANALÝZA BODŮ (MOV - Margin of Victory) ---
-        # Násobitel, který zvětšuje váhu výsledku podle dominance (11:1 vs 12:10)
-        # Logaritmus zajistí, že extrémní rozdíly (třeba 11:0) neshodí systém
+        # MOV (Margin of Victory) multiplier
         mov_multiplier = math.log(point_diff + 1) * (2.2 / ((actual_A - exp_A) * 0.001 + 2.2)) if actual_A != exp_A else 1
         
         shift = K_FACTOR * (actual_A - exp_A) * mov_multiplier
@@ -70,8 +67,6 @@ def predict_stats(eloA, eloB, starter="A"):
     pA_win = pA_win + SERVE_ADVANTAGE if starter == "A" else pA_win - SERVE_ADVANTAGE
     pA_win = min(max(pA_win, 0.02), 0.98)
     
-    # Odhad pravděpodobnosti bodů pro Over/Under
-    # Pokud jsou Elo u sebe, je vyšší šance na těsný výsledek (Over)
     elo_diff = abs(eloA - eloB)
     prob_over = max(0.2, 0.85 - (elo_diff / 600)) 
     
@@ -94,4 +89,26 @@ def parse_live_text(text):
     scores = re.findall(r'(\d+):(\d+)', full)
     if not scores: return None
     pts = [(int(a), int(b)) for a, b in scores]
-    if (pts[0][0] + pts[0][1]) > (pts[-1][0]
+    
+    # Opravená logika seřazení bodů
+    if (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): 
+        pts.reverse()
+    
+    starter = "A"
+    serve_info = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
+    if serve_info:
+        found = normalize_name(serve_info.group(1))
+        starter = "B" if (found in pB or pB in found) else "A"
+        
+    return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}", "win": 1 if pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
+
+# --- 4. UI ---
+st.set_page_config(page_title="TT STAR v10.5", layout="wide")
+st.title("🏓 TT STAR - VŠEUMĚL v10.5")
+
+t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie"])
+
+with t1:
+    raw_in = st.text_area("Vložte text z Tipsportu:", height=150)
+    col_s1, col_s2 = st.columns(2)
+    res = parse_live_text(raw_in) if raw_in else None
