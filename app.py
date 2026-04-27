@@ -15,7 +15,6 @@ def normalize_name(name):
     if not name: return ""
     name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
     name = re.sub(r'^[.\s]+', '', name)
-    # Odstraní jen osamocené iniciály, ponechá celá jména
     name = re.sub(r'^[A-Z]\.\s+', '', name) 
     return name.strip().upper()
 
@@ -53,7 +52,6 @@ def calculate_elos():
 # --- 3. PARSER ---
 def parse_live_text(text):
     text = re.sub(r'milestone-logo|Domů|Kurzy|Live|Soutěže|Komunita|Analýzy|Statistiky|Tikety', '', text, flags=re.IGNORECASE)
-    # Slepí rozbité skóre (řeší i více řádků mezi čísly)
     text = re.sub(r'(\d+)\s*\n*\s*[:]\s*\n*\s*(\d+)', r'\1:\2', text)
     
     lines = [l.strip() for l in text.split('\n') if l.strip()]
@@ -61,7 +59,6 @@ def parse_live_text(text):
     s_match = re.search(r'(\d+)\.\s*set', text, re.IGNORECASE)
     if s_match: set_num = int(s_match.group(1))
 
-    # Hledáme jména (ignorujeme balast)
     potential_names = []
     ignored = ["STOLNÍ TENIS", "VÝSLEDKY", "TIKETY", "KURZ", "PRŮBĚH", "DOBA PŘIHLÁŠENÍ", "VÍTĚZ", "ZAČÁTEK ZÁPASU", "KONEC ZÁPASU"]
     for l in lines:
@@ -72,13 +69,11 @@ def parse_live_text(text):
     if len(potential_names) < 2: return None
     pA, pB = potential_names[0], potential_names[1]
 
-    # Hledání skóre (poslední nalezené je to aktuální)
     scores = re.findall(r'(\d+):(\d+)', text)
     if not scores: return None
     pts = [(int(a), int(b)) for a, b in scores]
     if (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): pts.reverse()
 
-    # Logika podání
     starter = "A"
     serve_info = re.search(r'první podání\s+([A-ZÁ-Ž][a-zá-ž]+)', text, re.IGNORECASE)
     if serve_info:
@@ -95,8 +90,8 @@ def parse_live_text(text):
     return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}", "win": 1 if pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v10.9", layout="wide")
-st.title("🏓 TT STAR v10.9")
+st.set_page_config(page_title="TT STAR v10.9.1", layout="wide")
+st.title("🏓 TT STAR v10.9.1")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie"])
 
@@ -106,26 +101,16 @@ with t1:
     
     if res:
         st.success(f"✅ Rozpoznáno: {res['A']} vs {res['B']}")
-        # FORMULÁŘ PRO STABILNÍ ULOŽENÍ
         with st.form("save_form"):
             st.write(f"Skóre: {res['score']}")
             m_set = st.number_input("Číslo setu:", 1, 5, value=res['set_num'])
             m_start = st.selectbox("Podával v tomto setu:", ["A", "B"], index=0 if res['starter']=="A" else 1)
-            
             submit = st.form_submit_button("🚀 POTVRDIT A ULOŽIT")
             if submit:
-                new_e = {
-                    "id": str(datetime.datetime.now().timestamp()),
-                    "A": res["A"], "B": res["B"], 
-                    "score": res["score"], "win": res["win"], 
-                    "starter": m_start, "set_num": m_set
-                }
+                new_e = {"id": str(datetime.datetime.now().timestamp()), "A": res["A"], "B": res["B"], "score": res["score"], "win": res["win"], "starter": m_start, "set_num": m_set}
                 st.session_state.data.append(new_e)
                 save_data(st.session_state.data)
-                st.info("Zápis uložen. Aplikace se obnovuje...")
                 st.rerun()
-    elif raw_in:
-        st.error("Nepodařilo se detekovat data. Zkuste zkopírovat text znovu.")
 
 with t2:
     st.subheader("🔮 Predikce")
@@ -157,4 +142,10 @@ with t4:
                 ed_st = st.selectbox("Podával", ["A", "B"], index=0 if d.get('starter')=="A" else 1, key=f"st_{i}")
             with col2:
                 if st.button("💾 Uložit", key=f"sv_{i}"):
-                    st.session_state.data[i].update({"
+                    st.session_state.data[i].update({"score": ed_sc, "starter": ed_st})
+                    save_data(st.session_state.data)
+                    st.rerun()
+                if st.button("🗑️ Smazat", key=f"del_{i}"):
+                    st.session_state.data.pop(i)
+                    save_data(st.session_state.data)
+                    st.rerun()
