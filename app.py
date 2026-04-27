@@ -4,7 +4,7 @@ import json
 import os
 import re
 import datetime
-import math
+import math  # Přidáno pro logaritmický výpočet dominance
 
 # --- 1. NASTAVENÍ A DATA ---
 DATA_FILE = "tt_star_ultra_v9.json" 
@@ -34,7 +34,7 @@ def save_data(data):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 2. VÝPOČTY S ANALÝZOU BODŮ ---
+# --- 2. VÝPOČTY (AKTUALIZOVÁNO O ANALÝZU BODŮ) ---
 def calculate_elos():
     elos = {}
     for entry in st.session_state.data:
@@ -45,16 +45,18 @@ def calculate_elos():
         if pA not in elos: elos[pA] = BASE_ELO
         if pB not in elos: elos[pB] = BASE_ELO
         
+        # Analýza rozdílu bodů
         try:
             ptsA, ptsB = map(int, score.split(':'))
             point_diff = abs(ptsA - ptsB)
         except:
-            point_diff = 2
+            point_diff = 2 # Základní rozdíl při chybě
             
         exp_A = 1 / (1 + 10 ** ((elos[pB] - elos[pA]) / 400))
         actual_A = entry.get("win", 0)
         
-        # MOV (Margin of Victory) multiplier
+        # Výpočet dominance (Margin of Victory Multiplier)
+        # Výhra 11:1 dává větší posun než 12:10
         mov_multiplier = math.log(point_diff + 1) * (2.2 / ((actual_A - exp_A) * 0.001 + 2.2)) if actual_A != exp_A else 1
         
         shift = K_FACTOR * (actual_A - exp_A) * mov_multiplier
@@ -67,8 +69,9 @@ def predict_stats(eloA, eloB, starter="A"):
     pA_win = pA_win + SERVE_ADVANTAGE if starter == "A" else pA_win - SERVE_ADVANTAGE
     pA_win = min(max(pA_win, 0.02), 0.98)
     
+    # Chytřejší odhad Over 18.5 na základě vyrovnanosti Elo sil
     elo_diff = abs(eloA - eloB)
-    prob_over = max(0.2, 0.85 - (elo_diff / 600)) 
+    prob_over = max(0.25, 0.80 - (elo_diff / 500)) 
     
     return {"probA": pA_win, "probB": 1 - pA_win, "over18_5": prob_over}
 
@@ -89,10 +92,7 @@ def parse_live_text(text):
     scores = re.findall(r'(\d+):(\d+)', full)
     if not scores: return None
     pts = [(int(a), int(b)) for a, b in scores]
-    
-    # Opravená logika seřazení bodů
-    if (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): 
-        pts.reverse()
+    if (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): pts.reverse()
     
     starter = "A"
     serve_info = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
@@ -103,8 +103,8 @@ def parse_live_text(text):
     return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}", "win": 1 if pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v10.5", layout="wide")
-st.title("🏓 TT STAR - VŠEUMĚL v10.5")
+st.set_page_config(page_title="TT STAR v10.4", layout="wide")
+st.title("🏓 TT STAR - VŠEUMĚL v10.4")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie"])
 
@@ -112,3 +112,33 @@ with t1:
     raw_in = st.text_area("Vložte text z Tipsportu:", height=150)
     col_s1, col_s2 = st.columns(2)
     res = parse_live_text(raw_in) if raw_in else None
+    
+    with col_s1:
+        manual_set = st.number_input("Číslo setu:", 1, 5, value=res['set_num'] if res else 1)
+    with col_s2:
+        manual_starter = st.selectbox("Kdo začal podávat?", ["A", "B"], index=0 if (res and res['starter']=="A") else 1)
+        
+    if st.button("🚀 Uložit set"):
+        if res:
+            new_e = {"id": str(datetime.datetime.now().timestamp()), "A": res["A"], "B": res["B"], "score": res["score"], "win": res["win"], "starter": manual_starter, "set_num": manual_set, "timestamp": str(datetime.datetime.now())}
+            st.session_state.data.append(new_e)
+            save_data(st.session_state.data)
+            st.success(f"Uloženo: {res['A']} vs {res['B']}")
+
+with t2:
+    st.subheader("🔮 Predikce")
+    elos = calculate_elos()
+    c1, c2, c3 = st.columns(3)
+    with c1: pA_in = st.text_input("Hráč A").upper()
+    with c2: pB_in = st.text_input("Hráč B").upper()
+    with c3:
+        relevant = [d for d in st.session_state.data if (d.get('A')==pA_in and d.get('B')==pB_in) or (d.get('A')==pB_in and d.get('B')==pA_in)]
+        suggested = "A"
+        if relevant:
+            last_s = sorted(relevant, key=lambda x: x.get('set_num', 1))[-1]
+            next_s_num = last_s.get('set_num', 1) + 1
+            f_set = next((s for s in sorted(relevant, key=lambda x: x.get('set_num', 1)) if s.get('set_num')==1), last_s)
+            f_start = f_set.get('starter', "A")
+            if f_set.get('A') != pA_in: f_start = "B" if f_start == "A" else "A"
+            suggested = f_start if next_s_num % 2 == 1 else ("B" if f_start == "A" else "A")
+        final_s = st.radio("Podává v tomto setu:", ["A", "B"], index=0 if suggested=="A" else 1)
