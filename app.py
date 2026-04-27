@@ -138,4 +138,13 @@ with t4:
         with st.expander(f"📝 {d.get('A')} vs {d.get('B')} (Set {d.get('set_num')})"):
             ed_sc = st.text_input("Skóre", d.get('score'), key=f"sc_{i}")
             ed_set = st.number_input("Set", 1, 5, value=d.get('set_num'), key=f"set_{i}")
-            ed_st = st.selectbox("Podával",
+            ed_st = st.selectbox("Podával", ["A", "B"], index=0 if d.get('starter')=="A" else 1, key=f"st_{i}")
+            col_b1, col_b2 = st.columns(2)
+            if col_b1.button("💾 Uložit změny", key=f"sv_{i}"):
+                st.session_state.data[i].update({"score": ed_sc, "set_num": ed_set, "starter": ed_st})
+                save_data(st.session_state.data)
+                st.rerun()
+            if col_b2.button("🗑️ Smazat", key=f"del_{i}"):
+                st.session_state.data.pop(i)
+                save_data(st.session_state.data)
+                st.rerun()
