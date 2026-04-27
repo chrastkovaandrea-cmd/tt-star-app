@@ -52,10 +52,13 @@ def ocr_space(image_file):
 
     try:
         return result["ParsedResults"][0]["ParsedText"]
-    try:
-    ...
-except Exception as e:
-    st.error(f"Error: {e}")
+    if uploaded_file is not None:
+
+    st.image(uploaded_file)
+
+    st.success("Screenshot nahrán")
+
+    # zatím bez parsování
 
 if img_file:
 
