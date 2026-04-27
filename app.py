@@ -4,12 +4,11 @@ import json
 import os
 import numpy as np
 import datetime
-from collections import Counter
 
-# --- 1. KONFIGURACE A STAV ---
-DATA_FILE = "tt_pro_model_v4.json"
+# --- 1. NASTAVENÍ ---
+DATA_FILE = "tt_star_ultra_v6.json"
 BASE_ELO = 1500
-K_FACTOR = 32  # Rychlost změny Elo ratingu
+K_FACTOR = 32
 
 def normalize_name(name):
     if not name: return ""
@@ -27,162 +26,144 @@ def save_data(data):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 2. LOGIKA MODELU (Elo, Form, Tilt) ---
+if 'current_match_sets' not in st.session_state:
+    st.session_state.current_match_sets = []
 
-def calculate_elo_and_stats():
-    """Vypočítá Elo ratingy a statistiky pro všechny hráče v DB."""
+# --- 2. LOGIKA ELO ---
+def calculate_elo():
     elos = {}
-    stats = {} # Tilt, Podání, Forma
-    
-    # Seřadit data podle času (pokud máme uloženo)
-    for entry in st.session_state.data:
-        pA, pB = entry["A"], entry["B"]
+    for match in st.session_state.data:
+        pA, pB = match["A"], match["B"]
         if pA not in elos: elos[pA] = BASE_ELO
         if pB not in elos: elos[pB] = BASE_ELO
         
-        # Elo update
-        R_A = 10**(elos[pA]/400)
-        R_B = 10**(elos[pB]/400)
-        E_A = R_A / (R_A + R_B)
-        S_A = entry["win"]
-        elos[pA] = elos[pA] + K_FACTOR * (S_A - E_A)
-        elos[pB] = elos[pB] + K_FACTOR * ((1-S_A) - (1-E_A))
+        expected_A = 1 / (1 + 10**((elos[pB] - elos[pA]) / 400))
+        actual_A = 1 if match["winner"] == pA else 0
         
-        # Analýza Tiltu (prohrál set, i když vedl o 4+ body?)
-        # Tady bychom analyzovali entry["sequence"]
-        
+        shift = K_FACTOR * (actual_A - expected_A)
+        elos[pA] += shift
+        elos[pB] -= shift
     return elos
 
-def monte_carlo_pro(p_win_point_base, current_score=(0,0), server="A", iterations=5000):
-    """
-    Simulace se započtením podání.
-    Ve stolním tenise se podání střídá po 2 bodech.
-    """
-    a_wins = 0
-    # Bonus za podání (cca 5-10% ve stolním tenisu)
-    serve_bonus = 0.07 
-
-    for _ in range(iterations):
-        s_a, s_b = current_score
-        current_server = server
-        total_pts_in_sim = s_a + s_b
-        
-        while True:
-            # Dynamická pravděpodobnost podle toho, kdo podává
-            p_point = p_win_point_base
-            if current_server == "A": p_point += serve_bonus
-            else: p_point -= serve_bonus
-            
-            if np.random.rand() < p_point: s_a += 1
-            else: s_b += 1
-            
-            total_pts_in_sim += 1
-            # Střídání podání po 2 bodech (nebo po 1 v prodloužení)
-            if s_a >= 10 and s_b >= 10:
-                if total_pts_in_sim % 1 == 0: # Každý bod
-                    current_server = "B" if current_server == "A" else "A"
-            elif total_pts_in_sim % 2 == 0:
-                current_server = "B" if current_server == "A" else "A"
-                
-            if (s_a >= 11 or s_b >= 11) and abs(s_a - s_b) >= 2: break
-            
-        if s_a > s_b: a_wins += 1
-    return a_wins / iterations
-
 # --- 3. UI ---
-st.set_page_config(page_title="TT STAR ULTRA", layout="wide")
-st.title("🏓 TT STAR ULTRA MODEL (Elo + Point-by-Point)")
+st.set_page_config(page_title="TT STAR ANALYZER", layout="wide")
+st.title("🏓 TT STAR PRO MODEL - Best of 5")
 
-tabs = st.tabs(["📝 Zápis zápasu", "🔮 Predikce & Value", "📊 Elo Žebříček"])
+tabs = st.tabs(["🎮 Live Zápis", "📊 Model & Value", "🏆 Ranking"])
 
-# --- TAB 1: ZÁPIS ---
+# --- TAB 1: ZÁPIS (NA 3 VÍTĚZNÉ) ---
 with tabs[0]:
-    col1, col2 = st.columns(2)
-    with col1: pA_name = st.text_input("Hráč A").upper()
-    with col2: pB_name = st.text_input("Hráč B").upper()
+    col_names = st.columns(2)
+    with col_names[0]: pA = st.text_input("Hráč A").upper()
+    with col_names[1]: pB = st.text_input("Hráč B").upper()
+
+    st.divider()
     
-    st.write("---")
+    # Skóre zápasu
+    sets_A = sum(1 for s in st.session_state.current_match_sets if s['win'] == 'A')
+    sets_B = sum(1 for s in st.session_state.current_match_sets if s['win'] == 'B')
+    
+    st.markdown(f"<h1 style='text-align: center;'>{sets_A} : {sets_B}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<p style='text-align: center;'>{pA if pA else 'Hráč A'} vs {pB if pB else 'Hráč B'}</p>", unsafe_allow_html=True)
+
+    # Průběh setu
     if 'seq' not in st.session_state: st.session_state.seq = []
-    if 'server_start' not in st.session_state: st.session_state.server_start = "A"
-
-    c1, c2, c3, c4 = st.columns(4)
-    if c1.button(f"⚽ Bod {pA_name if pA_name else 'A'}"): st.session_state.seq.append("A")
-    if c2.button(f"⚽ Bod {pB_name if pB_name else 'B'}"): st.session_state.seq.append("B")
-    st.session_state.server_start = c3.radio("Začal podávat:", ["A", "B"])
-    if c4.button("🗑️ Smazat"): st.session_state.seq = []
-
-    # Zobrazení stavu
-    sa = st.session_state.seq.count("A")
-    sb = st.session_state.seq.count("B")
-    st.subheader(f"Skóre: {sa} : {sb}")
     
-    if st.button("💾 Uložit set a přepočítat Elo"):
-        if pA_name and pB_name and st.session_state.seq:
-            st.session_state.data.append({
-                "A": pA_name, "B": pB_name,
-                "sequence": st.session_state.seq.copy(),
-                "win": 1 if sa > sb else 0,
-                "timestamp": str(datetime.datetime.now())
+    sa, sb = st.session_state.seq.count("A"), st.session_state.seq.count("B")
+    
+    st.progress(min(sa / 11, 1.0) if sa > sb else min(sb / 11, 1.0))
+    st.subheader(f"Aktuální set: {sa} : {sb}")
+
+    c1, c2, c3 = st.columns([2, 2, 1])
+    # Tlačítka pro body - automaticky se deaktivují, pokud zápas skončil
+    match_ended = sets_A >= 3 or sets_B >= 3
+    
+    if c1.button(f"⚽ Bod {pA if pA else 'A'}", disabled=match_ended): 
+        st.session_state.seq.append("A")
+        st.rerun()
+    if c2.button(f"⚽ Bod {pB if pB else 'B'}", disabled=match_ended): 
+        st.session_state.seq.append("B")
+        st.rerun()
+    if c3.button("🔄 Zpět"): 
+        if st.session_state.seq: st.session_state.seq.pop()
+        st.rerun()
+
+    # Kontrola konce setu (11 bodů a rozdíl 2)
+    set_finished = (sa >= 11 or sb >= 11) and abs(sa - sb) >= 2
+    
+    if set_finished:
+        st.warning(f"Set skončil výsledkem {sa}:{sb}. Nezapomeňte ho uložit.")
+
+    col_save = st.columns(2)
+    if col_save[0].button("➕ ULOŽIT SET", use_container_width=True, type="primary"):
+        if sa > 0 or sb > 0:
+            st.session_state.current_match_sets.append({
+                "score": f"{sa}:{sb}",
+                "win": "A" if sa > sb else "B",
+                "sequence": st.session_state.seq.copy()
             })
-            save_data(st.session_state.data)
-            st.success("Set uložen do historie!")
             st.session_state.seq = []
             st.rerun()
 
-# --- TAB 2: PREDICKCE & VALUE ---
-with tabs[1]:
-    elos = calculate_elo_and_stats()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        target_A = st.text_input("Hráč A (Predikce)").upper()
-        odds_A = st.number_input("Kurz na A", value=1.85)
-    with col2:
-        target_B = st.text_input("Hráč B (Predikce)").upper()
-        odds_B = st.number_input("Kurz na B", value=1.85)
+    if match_ended:
+        st.success(f"🏆 Zápas skončil! Vítěz: {pA if sets_A > sets_B else pB}")
+        if st.button("💾 ULOŽIT CELÝ ZÁPAS DO HISTORIE", use_container_width=True):
+            winner = pA if sets_A > sets_B else pB
+            st.session_state.data.append({
+                "A": pA, "B": pB,
+                "sets": st.session_state.current_match_sets.copy(),
+                "final_score": f"{sets_A}:{sets_B}",
+                "winner": winner,
+                "timestamp": str(datetime.datetime.now())
+            })
+            save_data(st.session_state.data)
+            st.session_state.current_match_sets = []
+            st.success("Zápas byl úspěšně uložen a Elo přepočítáno.")
+            st.rerun()
 
-    if target_A and target_B:
-        eloA = elos.get(target_A, BASE_ELO)
-        eloB = elos.get(target_B, BASE_ELO)
+# --- TAB 2: MODEL & VALUE ---
+with tabs[1]:
+    elos = calculate_elo()
+    st.subheader("Simulace a hledání hodnoty")
+    
+    colA, colB = st.columns(2)
+    with colA:
+        inA = st.text_input("Hráč A", key="valA").upper()
+        oddsA = st.number_input("Kurz Tipsport (A)", value=1.85)
+    with colB:
+        inB = st.text_input("Hráč B", key="valB").upper()
+    
+    if inA and inB:
+        eA, eB = elos.get(inA, 1500), elos.get(inB, 1500)
+        # Pravděpodobnost na základě Elo
+        win_prob_A = 1 / (1 + 10 ** ((eB - eA) / 400))
+        fair_odds = 1 / win_prob_A
         
-        # 1. Elo Pravděpodobnost
-        expected_A = 1 / (1 + 10 ** ((eloB - eloA) / 400))
+        st.write(f"**Elo rating:** {int(eA)} vs {int(eB)}")
+        st.metric("Fair Kurz (podle historie)", round(fair_odds, 2))
         
-        # 2. Váha formy (posledních 5 zápasů)
-        def get_form(player):
-            recent = [x for x in st.session_state.data if x["A"] == player or x["B"] == player][-5:]
-            if not recent: return 0.5
-            wins = sum([1 for x in recent if (x["A"]==player and x["win"]==1) or (x["B"]==player and x["win"]==0)])
-            return wins / len(recent)
-        
-        formA = get_form(target_A)
-        formB = get_form(target_B)
-        
-        # Kombinované P-Win-Point (Elo + Forma)
-        # Upravujeme střední hodnotu 0.50 podle Elo rozdílu a formy
-        combined_p_point = 0.50 + (expected_A - 0.5) * 0.2 + (formA - formB) * 0.05
-        
-        # Simulace
-        prob_A = monte_carlo_pro(combined_p_point)
-        fair_odds = 1 / prob_A
-        
-        st.divider()
-        st.write(f"### Elo: {int(eloA)} vs {int(eloB)} | Forma: {int(formA*100)}% vs {int(formB*100)}%")
-        st.write(f"### Fair kurz: {round(fair_odds, 2)}")
-        
-        edge = (odds_A / fair_odds) - 1
-        if edge > 0.03: # Value nad 3%
-            st.success(f"🔥 VALUE BET ZJIŠTĚN: Edge {round(edge*100, 1)}%")
+        edge = (oddsA / fair_odds) - 1
+        if edge > 0.05:
+            st.success(f"🔥 VALUE DETEKCÍ: +{round(edge*100, 1)}% na {inA}")
+        elif edge < -0.05:
+            st.warning(f"Nevýhodný kurz (Ztráta {round(edge*100, 1)}%)")
         else:
-            st.info(f"Bez výrazné hodnoty (Edge {round(edge*100, 1)}%)")
+            st.info("Kurz odpovídá historické síle.")
 
 # --- TAB 3: ŽEBŘÍČEK ---
 with tabs[2]:
-    st.subheader("🏆 Elo Žebříček (Síla hráčů)")
-    elos = calculate_elo_and_stats()
-    sorted_elos = sorted(elos.items(), key=lambda x: x[1], reverse=True)
-    
-    for rank, (name, val) in enumerate(sorted_elos):
-        st.write(f"{rank+1}. **{name}** - {int(val)} bodů")
+    st.subheader("🏆 Elo Ranking Hráčů")
+    current_elos = calculate_elo()
+    if current_elos:
+        sorted_ranking = sorted(current_elos.items(), key=lambda x: x[1], reverse=True)
+        for r, (name, val) in enumerate(sorted_ranking):
+            st.write(f"{r+1}. **{name}** — {int(val)} bodů")
+    else:
+        st.info("Zatím žádná data. Uložte první zápas.")
 
-st.sidebar.write(f"Model v4.0 | {len(st.session_state.data)} setů")
+st.sidebar.write(f"Celkem zápasů: {len(st.session_state.data)}")
+if st.sidebar.button("Resetovat model"):
+    if st.sidebar.checkbox("Opravdu smazat všechna data?"):
+        save_data([])
+        st.session_state.data = []
+        st.rerun()
