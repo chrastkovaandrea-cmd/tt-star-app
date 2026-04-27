@@ -111,7 +111,7 @@ def parse_tipsport(text):
                     })
 
             except:
-                pass
+
 
     return matches
 
