@@ -6,7 +6,6 @@ import re
 import datetime
 
 # --- 1. NASTAVENÍ A DATA ---
-# Změněno zpět na v9, aby se načetla tvoje původní data
 DATA_FILE = "tt_star_ultra_v9.json" 
 BASE_ELO = 1500
 K_FACTOR = 32
@@ -85,10 +84,10 @@ def parse_live_text(text):
     return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}", "win": 1 if pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v10.1", layout="wide")
-st.title("🏓 TT STAR - VŠEUMĚL v10.1")
+st.set_page_config(page_title="TT STAR v10.3", layout="wide")
+st.title("🏓 TT STAR - VŠEUMĚL v10.3")
 
-t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Správa"])
+t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie"])
 
 with t1:
     raw_in = st.text_area("Vložte text z Tipsportu:", height=150)
@@ -105,28 +104,31 @@ with t1:
             new_e = {"id": str(datetime.datetime.now().timestamp()), "A": res["A"], "B": res["B"], "score": res["score"], "win": res["win"], "starter": manual_starter, "set_num": manual_set, "timestamp": str(datetime.datetime.now())}
             st.session_state.data.append(new_e)
             save_data(st.session_state.data)
-            st.success(f"Uloženo: {res['A']} vs {res['B']} | Set {manual_set}")
+            st.success(f"Uloženo: {res['A']} vs {res['B']}")
 
 with t2:
     st.subheader("🔮 Predikce")
     elos = calculate_elos()
     c1, c2, c3 = st.columns(3)
-    with c1: pA = st.text_input("Hráč A").upper()
-    with c2: pB = st.text_input("Hráč B").upper()
+    with c1: pA_in = st.text_input("Hráč A").upper()
+    with c2: pB_in = st.text_input("Hráč B").upper()
     with c3:
+        # Odhad podávajícího podle historie
+        relevant = [d for d in st.session_state.data if (d.get('A')==pA_in and d.get('B')==pB_in) or (d.get('A')==pB_in and d.get('B')==pA_in)]
         suggested = "A"
-        relevant = [d for d in st.session_state.data if (d['A']==pA and d['B']==pB) or (d['A']==pB and d['B']==pA)]
         if relevant:
-            last_s = sorted(relevant, key=lambda x: x['set_num'])[-1]
-            next_s_num = last_s['set_num'] + 1
-            f_set = next((s for s in sorted(relevant, key=lambda x: x['set_num']) if s['set_num']==1), last_s)
-            f_start = f_set['starter'] if f_set['A'] == pA else ("B" if f_set['starter']=="A" else "A")
+            last_s = sorted(relevant, key=lambda x: x.get('set_num', 1))[-1]
+            next_s_num = last_s.get('set_num', 1) + 1
+            f_set = next((s for s in sorted(relevant, key=lambda x: x.get('set_num', 1)) if s.get('set_num')==1), last_s)
+            f_start = f_set.get('starter', "A")
+            if f_set.get('A') != pA_in: f_start = "B" if f_start == "A" else "A"
             suggested = f_start if next_s_num % 2 == 1 else ("B" if f_start == "A" else "A")
+        
         final_s = st.radio("Podává v tomto setu:", ["A", "B"], index=0 if suggested=="A" else 1)
 
-    if pA and pB:
-        s = predict_stats(elos.get(pA, BASE_ELO), elos.get(pB, BASE_ELO), final_s)
-        st.write(f"Šance {pA}: **{round(s['probA']*100)}%** | Šance {pB}: **{round(s['probB']*100)}%**")
+    if pA_in and pB_in:
+        s = predict_stats(elos.get(pA_in, BASE_ELO), elos.get(pB_in, BASE_ELO), final_s)
+        st.write(f"Šance {pA_in}: **{round(s['probA']*100)}%** | Šance {pB_in}: **{round(s['probB']*100)}%**")
 
 with t3:
     elostats = calculate_elos()
@@ -134,25 +136,21 @@ with t3:
         st.write(f"{r+1}. **{n}** — {int(v)}")
 
 with t4:
-    st.subheader("⚙️ Správa dat")
-    
-    if st.button("⚠️ SMAZAT CELOU DATABÁZI"):
-        st.session_state.data = []
-        save_data([])
-        st.rerun()
-        
-    st.divider()
+    st.subheader("⚙️ Správa Historie")
     for i in range(len(st.session_state.data)-1, -1, -1):
         d = st.session_state.data[i]
-        with st.expander(f"{d['A']} {d['score']} {d['B']} (Set {d['set_num']})"):
-            c_ed1, c_ed2 = st.columns(2)
-            # Editace podání přímo v expanderu
-            new_st = st.selectbox("Změnit podávajícího:", ["A", "B"], index=0 if d['starter']=="A" else 1, key=f"edit_st_{i}")
-            if st.button("💾 Uložit změnu podání", key=f"btn_st_{i}"):
-                st.session_state.data[i]['starter'] = new_st
-                save_data(st.session_state.data)
-                st.rerun()
-            if st.button("🗑️ Smazat tento záznam", key=f"del_single_{i}"):
+        # Bezpečné načtení hodnot, aby to neházelo KeyError
+        name_A = d.get('A', 'Neznámý')
+        name_B = d.get('B', 'Neznámý')
+        score = d.get('score', '?:?')
+        s_num = d.get('set_num', '?')
+        starter = d.get('starter', '?')
+        
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.write(f"**{name_A}** {score} **{name_B}** (Set: {s_num}, Podával: {starter})")
+        with col2:
+            if st.button("Smazat", key=f"del_{i}"):
                 st.session_state.data.pop(i)
                 save_data(st.session_state.data)
                 st.rerun()
