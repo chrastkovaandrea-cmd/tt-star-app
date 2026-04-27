@@ -365,3 +365,114 @@ st.write("EV:",round(ev,3))
 # =========================
 
 st.write("Stored sets:",len(data))
+# =========================
+# PREDICTION ENGINE
+# =========================
+
+st.header("📊 Prediction")
+
+if len(data) < 30:
+    st.warning("Málo dat (min 30 setů)")
+else:
+
+    A = st.text_input("Hráč A")
+    B = st.text_input("Hráč B")
+
+    oddsA = st.number_input("Kurz A", value=1.8)
+    oddsB = st.number_input("Kurz B", value=2.0)
+
+    if st.button("🔮 Spočítat"):
+
+        A = normalize_name(A)
+        B = normalize_name(B)
+
+        # DATA
+        playerA = [x["score"] for x in data if x["A"]==A or x["B"]==A]
+        playerB = [x["score"] for x in data if x["A"]==B or x["B"]==B]
+
+        matchup = [x["score"] for x in data if 
+                   (x["A"]==A and x["B"]==B) or 
+                   (x["A"]==B and x["B"]==A)]
+
+        global_scores = [x["score"] for x in data]
+
+        from collections import Counter
+
+        final = Counter()
+
+        # GLOBAL
+        for k,v in Counter(global_scores).items():
+            final[k] += v * 0.3
+
+        # PLAYER A
+        for k,v in Counter(playerA).items():
+            final[k] += v * 0.2
+
+        # PLAYER B
+        for k,v in Counter(playerB).items():
+            final[k] += v * 0.2
+
+        # MATCHUP
+        if len(matchup) > 0:
+            for k,v in Counter(matchup).items():
+                final[k] += v * 0.3
+
+        total = sum(final.values())
+
+        st.subheader("📊 Pravděpodobnosti skóre setu")
+
+        probs = []
+
+        for score,count in final.most_common(6):
+
+            p = count / total
+
+            probs.append((score,p))
+
+            st.write(score, "→", round(p*100,1), "%")
+
+        # =========================
+        # EVEN / ODD
+        # =========================
+
+        even = sum(count for score,count in final.items()
+                   if (int(score.split(":")[0]) + int(score.split(":")[1])) % 2 == 0)
+
+        even = even / total
+
+        st.subheader("⚖️ Sudý / lichý")
+
+        st.write("Even:", round(even*100,1), "%")
+        st.write("Odd:", round((1-even)*100,1), "%")
+
+        # =========================
+        # OVER / UNDER
+        # =========================
+
+        line = st.number_input("Line (např 18.5)", value=18.5)
+
+        over = sum(count for score,count in final.items()
+                   if (int(score.split(":")[0]) + int(score.split(":")[1])) > line)
+
+        over = over / total
+
+        st.subheader("📈 Over / Under")
+
+        st.write("Over:", round(over*100,1), "%")
+        st.write("Under:", round((1-over)*100,1), "%")
+
+        # =========================
+        # EV + EDGE
+        # =========================
+
+        pA = sum(count for score,count in final.items()
+                 if int(score.split(":")[0]) > int(score.split(":")[1])) / total
+
+        edgeA = pA - (1/oddsA)
+        edgeB = (1-pA) - (1/oddsB)
+
+        st.subheader("💰 VALUE")
+
+        st.write("P(A):", round(pA,3))
+        st.write("Edge A:", round(edgeA,3))
+        st.write("Edge B:", round(edgeB,3))
