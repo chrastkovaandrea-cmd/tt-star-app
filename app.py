@@ -50,8 +50,7 @@ def ocr_space(image_file):
 
     result = response.json()
 
-        return result["ParsedResults"][0]["ParsedText"]
-    if uploaded_file is not None:
+if uploaded_file is not None:
 
     st.image(uploaded_file)
 
@@ -65,6 +64,7 @@ if img_file:
 
     st.text("Detected text:")
     st.text(text[:1000])
+
     import re
 
 def parse_tipsport(text):
