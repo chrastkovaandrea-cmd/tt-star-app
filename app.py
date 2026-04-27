@@ -52,8 +52,10 @@ def ocr_space(image_file):
 
     try:
         return result["ParsedResults"][0]["ParsedText"]
-    except:
-        return ""
+    try:
+    ...
+except Exception as e:
+    st.error(f"Error: {e}")
 
 if img_file:
 
