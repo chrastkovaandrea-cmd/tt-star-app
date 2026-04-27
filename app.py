@@ -19,7 +19,9 @@ def normalize_name(name):
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
-            with open(DATA_FILE, "r") as f: return json.load(f)
+            with open(DATA_FILE, "r") as f: 
+                data = json.load(f)
+                return data if isinstance(data, list) else []
         except: return []
     return []
 
@@ -63,30 +65,38 @@ def parse_live_text(text):
 def calculate_elos():
     elos = {}
     for entry in st.session_state.data:
-        pA, pB = entry["A"], entry["B"]
+        pA, pB = entry.get("A", "Neznámý"), entry.get("B", "Neznámý")
         if pA not in elos: elos[pA] = BASE_ELO
         if pB not in elos: elos[pB] = BASE_ELO
         exp_A = 1 / (1 + 10 ** ((elos[pB] - elos[pA]) / 400))
-        actual_A = entry["win"]
+        actual_A = entry.get("win", 0)
         shift = K_FACTOR * (actual_A - exp_A)
         elos[pA] += shift
         elos[pB] -= shift
     return elos
 
 # --- 3. UI ---
-st.set_page_config(page_title="TT STAR ULTRA v9.2", layout="wide")
-st.title("🏓 TT STAR ANALYZER v9.2")
+st.set_page_config(page_title="TT STAR ANALYZER v9.3", layout="wide")
+st.title("🏓 TT STAR ANALYZER v9.3")
 
 tabs = st.tabs(["📥 Vložit data", "📊 Analýza", "🏆 Žebříček", "🗑️ Správa dat"])
 
 with tabs[0]:
     st.subheader("📋 Vložení textu")
-    raw_text = st.text_area("Vložte text zápasu:", height=200)
+    raw_text = st.text_area("Vložte text zápasu:", height=200, key="input_area")
     if st.button("🚀 Analyzovat a Uložit set"):
         if raw_text:
             result = parse_live_text(raw_text)
             if result:
-                new_entry = {"id": str(datetime.datetime.now().timestamp()), "A": result["A"], "B": result["B"], "sequence": result["sequence"], "starter": result["starter"], "win": result["win"], "score": result["score"], "timestamp": str(datetime.datetime.now())}
+                new_entry = {
+                    "id": str(datetime.datetime.now().timestamp()), 
+                    "A": result["A"], "B": result["B"], 
+                    "sequence": result["sequence"], 
+                    "starter": result["starter"], 
+                    "win": result["win"], 
+                    "score": result["score"], 
+                    "timestamp": str(datetime.datetime.now())
+                }
                 st.session_state.data.append(new_entry)
                 save_data(st.session_state.data)
                 st.success(f"Uloženo: {result['A']} vs {result['B']} ({result['score']})")
@@ -109,8 +119,9 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("🏆 Žebříček")
     current_elos = calculate_elos()
-    for r, (n, v) in enumerate(sorted(current_elos.items(), key=lambda x: x[1], reverse=True)):
-        st.write(f"{r+1}. **{n}** — {int(v)} Elo")
+    if current_elos:
+        for r, (n, v) in enumerate(sorted(current_elos.items(), key=lambda x: x[1], reverse=True)):
+            st.write(f"{r+1}. **{n}** — {int(v)} Elo")
 
 with tabs[3]:
     st.subheader("📜 Historie a mazání")
@@ -118,17 +129,22 @@ with tabs[3]:
         st.info("Žádná data k zobrazení.")
     else:
         # Zobrazíme seznam od nejnovějšího
-        for i, entry in enumerate(reversed(st.session_state.data)):
-            real_index = len(st.session_state.data) - 1 - i
+        for i in range(len(st.session_state.data) - 1, -1, -1):
+            entry = st.session_state.data[i]
+            pA = entry.get("A", "Hráč A")
+            pB = entry.get("B", "Hráč B")
+            sc = entry.get("score", "??:??")
+            ts = entry.get("timestamp", "Neznámý čas")[:16]
+            
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
-                st.write(f"**{entry['A']}** vs **{entry['B']}** ({entry['score']})")
+                st.write(f"**{pA}** vs **{pB}** ({sc})")
             with col2:
-                st.write(f"{entry['timestamp'][:16]}")
+                st.write(f"{ts}")
             with col3:
-                if st.button("Smazat", key=f"del_{real_index}"):
-                    st.session_state.data.pop(real_index)
+                if st.button("Smazat", key=f"del_{i}"):
+                    st.session_state.data.pop(i)
                     save_data(st.session_state.data)
-                    st.rerun() # Refresh stránky
+                    st.rerun()
 
 st.sidebar.write(f"Sety v paměti: {len(st.session_state.data)}")
