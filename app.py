@@ -4,7 +4,7 @@ import json
 import os
 import re
 import datetime
-import math  # Přidáno pro logaritmický výpočet dominance
+import math # Potřeba pro výpočet dominance
 
 # --- 1. NASTAVENÍ A DATA ---
 DATA_FILE = "tt_star_ultra_v9.json" 
@@ -34,29 +34,27 @@ def save_data(data):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 2. VÝPOČTY (AKTUALIZOVÁNO O ANALÝZU BODŮ) ---
+# --- 2. VÝPOČTY (AKTUALIZOVÁNO O BODY) ---
 def calculate_elos():
     elos = {}
     for entry in st.session_state.data:
         pA, pB = entry.get("A"), entry.get("B")
         score = entry.get("score", "0:0")
         if not pA or not pB: continue
-        
         if pA not in elos: elos[pA] = BASE_ELO
         if pB not in elos: elos[pB] = BASE_ELO
         
-        # Analýza rozdílu bodů
+        # Analýza dominance bodů
         try:
-            ptsA, ptsB = map(int, score.split(':'))
-            point_diff = abs(ptsA - ptsB)
+            sa, sb = map(int, score.split(':'))
+            point_diff = abs(sa - sb)
         except:
-            point_diff = 2 # Základní rozdíl při chybě
+            point_diff = 2
             
         exp_A = 1 / (1 + 10 ** ((elos[pB] - elos[pA]) / 400))
         actual_A = entry.get("win", 0)
         
-        # Výpočet dominance (Margin of Victory Multiplier)
-        # Výhra 11:1 dává větší posun než 12:10
+        # Násobitel dominance (MOV)
         mov_multiplier = math.log(point_diff + 1) * (2.2 / ((actual_A - exp_A) * 0.001 + 2.2)) if actual_A != exp_A else 1
         
         shift = K_FACTOR * (actual_A - exp_A) * mov_multiplier
@@ -69,9 +67,9 @@ def predict_stats(eloA, eloB, starter="A"):
     pA_win = pA_win + SERVE_ADVANTAGE if starter == "A" else pA_win - SERVE_ADVANTAGE
     pA_win = min(max(pA_win, 0.02), 0.98)
     
-    # Chytřejší odhad Over 18.5 na základě vyrovnanosti Elo sil
+    # Over 18.5 založený na vyrovnanosti Elo
     elo_diff = abs(eloA - eloB)
-    prob_over = max(0.25, 0.80 - (elo_diff / 500)) 
+    prob_over = max(0.25, 0.85 - (elo_diff / 500))
     
     return {"probA": pA_win, "probB": 1 - pA_win, "over18_5": prob_over}
 
@@ -142,3 +140,42 @@ with t2:
             if f_set.get('A') != pA_in: f_start = "B" if f_start == "A" else "A"
             suggested = f_start if next_s_num % 2 == 1 else ("B" if f_start == "A" else "A")
         final_s = st.radio("Podává v tomto setu:", ["A", "B"], index=0 if suggested=="A" else 1)
+
+    if pA_in and pB_in:
+        s = predict_stats(elos.get(pA_in, BASE_ELO), elos.get(pB_in, BASE_ELO), final_s)
+        st.write(f"Šance {pA_in}: **{round(s['probA']*100)}%** | Šance {pB_in}: **{round(s['probB']*100)}%**")
+        st.write(f"Pravděpodobnost Over 18.5: **{round(s['over18_5']*100)}%**")
+
+with t3:
+    elostats = calculate_elos()
+    for r, (n, v) in enumerate(sorted(elostats.items(), key=lambda x: x[1], reverse=True)):
+        st.write(f"{r+1}. **{n}** — {int(v)}")
+
+with t4:
+    st.subheader("⚙️ Správa Historie")
+    for i in range(len(st.session_state.data)-1, -1, -1):
+        d = st.session_state.data[i]
+        
+        name_A, name_B = d.get('A', 'Neznámý'), d.get('B', 'Neznámý')
+        score, s_num, starter = d.get('score', '0:0'), d.get('set_num', 1), d.get('starter', 'A')
+
+        with st.expander(f"📝 {name_A} vs {name_B} ({score}) | Set: {s_num}"):
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                edit_score = st.text_input("Upravit skóre", score, key=f"edit_sc_{i}")
+                edit_starter = st.selectbox("Upravit podání", ["A", "B"], index=0 if starter=="A" else 1, key=f"edit_st_{i}")
+            with col_e2:
+                if st.button("💾 Uložit změny", key=f"save_btn_{i}"):
+                    st.session_state.data[i]['score'] = edit_score
+                    st.session_state.data[i]['starter'] = edit_starter
+                    try:
+                        sa, sb = map(int, edit_score.split(':'))
+                        st.session_state.data[i]['win'] = 1 if sa > sb else 0
+                    except: pass
+                    save_data(st.session_state.data)
+                    st.rerun()
+                
+                if st.button("🗑️ Smazat záznam", key=f"del_btn_{i}"):
+                    st.session_state.data.pop(i)
+                    save_data(st.session_state.data)
+                    st.rerun()
