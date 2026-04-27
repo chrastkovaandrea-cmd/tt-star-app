@@ -52,6 +52,97 @@ if img_file:
 
     st.text("Detected text:")
     st.text(text[:1000])
+    import re
+
+def parse_tipsport(text):
+
+    matches = []
+
+    lines = text.split("\n")
+
+    for i in range(len(lines)):
+
+        line = lines[i]
+
+        # hledá "hráč A - hráč B"
+        if " - " in line:
+
+            try:
+                players = line.split("-")
+                A = players[0].strip()
+                B = players[1].strip()
+
+                next_line = lines[i+1]
+
+                # např 3:1
+                set_match = re.search(r"\d:\d", next_line)
+
+                # např (11:9,11:7,...)
+                score_match = re.search(r"\((.*?)\)", next_line)
+
+                odds_line = lines[i+2]
+
+                odds = re.findall(r"\d+\.\d+", odds_line)
+
+                if set_match and score_match and len(odds)>=2:
+
+                    sets = set_match.group()
+                    scores = score_match.group(1)
+
+                    oddsA = float(odds[0])
+                    oddsB = float(odds[1])
+
+                    matches.append({
+                        "A":A,
+                        "B":B,
+                        "sets":sets,
+                        "scores":scores,
+                        "oddsA":oddsA,
+                        "oddsB":oddsB
+                    })
+
+            except:
+                pass
+
+    return matches
+
+
+# =========================
+# PARSE + SAVE
+# =========================
+
+parsed = parse_tipsport(text)
+
+if len(parsed) > 0:
+
+    st.success(f"Detected {len(parsed)} matches")
+
+    for m in parsed:
+
+        st.write(m)
+
+        diff = abs(m["oddsA"] - m["oddsB"])
+
+        for s in m["scores"].split(","):
+
+            a,b = s.strip().split(":")
+
+            data.append({
+                "A":m["A"],
+                "B":m["B"],
+                "score":f"{a}:{b}",
+                "points":int(a)+int(b),
+                "diff":diff,
+                "sets":m["sets"]
+            })
+
+    save()
+
+    st.success("✔ data saved to model")
+
+else:
+
+    st.error("No matches detected")
 # =========================
 # ADD MATCH TRAINING
 # =========================
