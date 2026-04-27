@@ -39,6 +39,7 @@ if 'data' not in st.session_state:
 def calculate_advanced_stats():
     elos, serve_stats, h2h = {}, {}, {}
     now = datetime.datetime.now()
+    # Důležité pro Elo: počítat od nejstarších po nejnovější
     sorted_data = sorted(st.session_state.data, key=lambda x: x.get('timestamp', '0'))
     
     for entry in sorted_data:
@@ -83,7 +84,6 @@ def predict_advanced(pA, pB, starter, elos, serve_stats, h2h):
     eloA, eloB = elos.get(pA, BASE_ELO), elos.get(pB, BASE_ELO)
     pA_win = 1 / (1 + 10 ** ((eloB - eloA) / 400))
     
-    # Osobní výhoda podání
     s_statA = serve_stats.get(pA, {"wins": 0, "total": 0})
     s_statB = serve_stats.get(pB, {"wins": 0, "total": 0})
     advA = (s_statA["wins"] / max(1, s_statA["total"])) * 0.1
@@ -104,7 +104,6 @@ def predict_advanced(pA, pB, starter, elos, serve_stats, h2h):
     return pA_win, prob_over
 
 def get_exact_score_probs(probA):
-    # Matematická simulace bez nutnosti scipy
     lA = 11.0 if probA >= 0.5 else 11.0 * (probA / (1 - probA + 1e-9))
     lB = 11.0 if probA < 0.5 else 11.0 * ((1 - probA) / (probA + 1e-9))
     scores = []
@@ -135,8 +134,8 @@ def parse_live_text(text):
     return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}" if pts else "0:0", "win": 1 if pts and pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v10.8 ULTRA", layout="wide")
-st.title("🏓 TT STAR v10.8 - ULTRA ANALYTIK")
+st.set_page_config(page_title="TT STAR v10.8.1 ULTRA", layout="wide")
+st.title("🏓 TT STAR - ULTRA ANALYTIK")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit Set", "🔮 Predikce & Value", "🏆 Žebříček", "⚙️ Historie"])
 
@@ -146,12 +145,12 @@ with t1:
     res = parse_live_text(raw_in) if raw_in else None
     with c_d1: m_date = st.date_input("Datum zápasu:", datetime.date.today())
     with c_d2: m_set = st.number_input("Číslo setu:", 1, 5, value=res['set_num'] if res else 1)
-    with c_d3: m_start = st.selectbox("Podával:", ["A", "B"], index=0 if (res and res['starter']=="A") else 1)
-    if st.button("🚀 Uložit"):
+    with c_d3: m_start = st.selectbox("Kdo začal podávat?", ["A", "B"], index=0 if (res and res['starter']=="A") else 1)
+    if st.button("🚀 Uložit set"):
         if res:
             dt = datetime.datetime.combine(m_date, datetime.datetime.now().time())
             st.session_state.data.append({"id": str(dt.timestamp()), "A": res["A"], "B": res["B"], "score": res["score"], "win": res["win"], "starter": m_start, "set_num": m_set, "timestamp": dt.isoformat()})
-            save_data(st.session_state.data); st.rerun()
+            save_data(st.session_state.data); st.success("Uloženo!"); st.rerun()
 
 with t2:
     st.subheader("🔮 Analýza sázky")
@@ -161,33 +160,29 @@ with t2:
     with col_in2: pB_in = st.text_input("Hráč B").upper()
     
     col_p1, col_p2, col_p3 = st.columns(3)
-    with col_p1: final_s = st.radio("Podává:", ["A", "B"])
-    with col_p2: oddsA = st.number_input("Kurz Vítěz:", 1.0, 10.0, 1.85)
-    with col_p3: oddsO = st.number_input("Kurz Over 18.5:", 1.0, 10.0, 1.85)
+    with col_p1: final_s = st.radio("Podává v tomto setu:", ["A", "B"])
+    with col_p2: oddsA = st.number_input("Aktuální kurz na vítěze A:", 1.0, 10.0, 1.85)
+    with col_p3: oddsO = st.number_input("Aktuální kurz na Over 18.5:", 1.0, 10.0, 1.85)
 
     if pA_in and pB_in:
         pA_w, p_ov = predict_advanced(pA_in, pB_in, final_s, cur_elos, cur_serve, cur_h2h)
-        
-        # Sekce Value
         v1, v2 = st.columns(2)
         with v1:
             valA = (pA_w * oddsA) - 1
             st.metric(f"Vítěz {pA_in}", f"{round(pA_w*100,1)}%", f"Fair: {round(1/pA_w,2)}")
-            if valA > 0: st.success(f"VALUE: +{round(valA*100,1)}%")
+            if valA > 0: st.success(f"✅ VALUE: +{round(valA*100,1)}%")
         with v2:
             valO = (p_ov * oddsO) - 1
-            st.metric("Over 18.5", f"{round(p_ov*100,1)}%", f"Fair: {round(1/p_ov,2)}")
-            if valO > 0: st.success(f"VALUE: +{round(valO*100,1)}%")
+            st.metric("Over 18.5 bodů", f"{round(p_ov*100,1)}%", f"Fair: {round(1/p_ov,2)}")
+            if valO > 0: st.success(f"✅ VALUE: +{round(valO*100,1)}%")
 
-        # Přesné skóre setu
         st.subheader("🎯 Odhad skóre setu")
         ex_sc = get_exact_score_probs(pA_w)
         cols = st.columns(5)
         for i, ((sa, sb), p) in enumerate(ex_sc):
             with cols[i]: st.info(f"**{sa}:{sb}**\n\n{round(p*100,1)}%")
 
-        # Výsledek zápasu na sety
-        st.subheader("🏆 Přesný výsledek (na sety)")
+        st.subheader("🏆 Přesný výsledek zápasu (sety)")
         p = pA_w
         r = [("3:0", p**3), ("3:1", 3*p**3*(1-p)), ("3:2", 6*p**3*(1-p)**2), ("2:3", 6*(1-p)**3*p**2), ("1:3", 3*(1-p)**3*p), ("0:3", (1-p)**3)]
         cols_r = st.columns(6)
@@ -196,13 +191,30 @@ with t2:
 
 with t3:
     cur_elos, _, _ = calculate_advanced_stats()
-    for r, (n, v) in enumerate(sorted(cur_elos.items(), key=lambda x: x[1], reverse=True)):
+    sorted_ranking = sorted(cur_elos.items(), key=lambda x: x[1], reverse=True)
+    for r, (n, v) in enumerate(sorted_ranking):
         st.write(f"{r+1}. **{n}** — {int(v)} pts")
 
 with t4:
-    st.subheader("⚙️ Historie")
+    st.subheader("⚙️ Správa Historie")
     for i in range(len(st.session_state.data)-1, -1, -1):
         d = st.session_state.data[i]
-        with st.expander(f"📝 {d['A']} vs {d['B']} ({d['score']})"):
-            if st.button("🗑️ Smazat", key=f"d_{i}"):
-                st.session_state.data.pop(i); save_data(st.session_state.data); st.rerun()
+        ts_val = datetime.datetime.fromisoformat(d.get('timestamp', datetime.datetime.now().isoformat()))
+        with st.expander(f"📝 {ts_val.strftime('%d.%m. %H:%M')} | {d['A']} vs {d['B']} ({d['score']})"):
+            c_e1, c_e2 = st.columns(2)
+            with c_e1:
+                new_A = st.text_input("Hráč A", d['A'], key=f"nA_{i}").upper()
+                new_B = st.text_input("Hráč B", d['B'], key=f"nB_{i}").upper()
+                new_score = st.text_input("Skóre", d['score'], key=f"nS_{i}")
+            with c_e2:
+                new_date = st.date_input("Datum", ts_val.date(), key=f"nD_{i}")
+                new_starter = st.selectbox("Podání", ["A", "B"], index=0 if d['starter']=="A" else 1, key=f"nst_{i}")
+                if st.button("💾 Uložit změny", key=f"sv_{i}"):
+                    st.session_state.data[i].update({"A": new_A, "B": new_B, "score": new_score, "starter": new_starter, "timestamp": datetime.datetime.combine(new_date, ts_val.time()).isoformat()})
+                    try:
+                        sa, sb = map(int, new_score.split(':'))
+                        st.session_state.data[i]['win'] = 1 if sa > sb else 0
+                    except: pass
+                    save_data(st.session_state.data); st.rerun()
+                if st.button("🗑️ Smazat záznam", key=f"dl_{i}"):
+                    st.session_state.data.pop(i); save_data(st.session_state.data); st.rerun()
