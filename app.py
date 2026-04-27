@@ -4,7 +4,6 @@ import json
 import os
 import re
 import datetime
-import math
 
 # --- 1. NASTAVENÍ A DATA ---
 DATA_FILE = "tt_star_ultra_v9.json"
@@ -33,89 +32,94 @@ def save_data(data):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 2. LOGIKA PREDIKCE (MATH ENGINE) ---
+# --- 2. LOGIKA PREDIKCE ---
 def get_win_prob(eloA, eloB):
     return 1 / (1 + 10 ** ((eloB - eloA) / 400))
 
 def predict_stats(eloA, eloB):
     pA_win_match = get_win_prob(eloA, eloB)
-    # Odhad pravděpodobnosti vyhrání JEDNOHO BODU
     pA_point = 0.5 + (pA_win_match - 0.5) * 0.2
-    
-    # Simulace Over/Under 18.5
-    prob_over_18_5 = (pA_point * (1-pA_point)) * 3.5 
-    prob_over_18_5 = min(max(prob_over_18_5, 0.3), 0.7) 
-
+    prob_over_18_5 = min(max((pA_point * (1-pA_point)) * 3.5, 0.3), 0.7)
     return {
-        "probA": pA_win_match,
-        "probB": 1 - pA_win_match,
-        "over18_5": prob_over_18_5,
-        "under18_5": 1 - prob_over_18_5,
+        "probA": pA_win_match, "probB": 1 - pA_win_match,
+        "over18_5": prob_over_18_5, "under18_5": 1 - prob_over_18_5,
         "expected_score": "11:9" if pA_win_match > 0.5 else "9:11"
     }
 
-# --- 3. SMART PARSER v9.6 (OPRAVENÝ FILTR REKAPITULACE) ---
+# --- 3. ROBUSTNÍ SMART PARSER v9.7 ---
 def parse_live_text(text):
-    # Rozdělení na řádky
-    raw_lines = [l.strip() for l in text.split('\n') if l.strip()]
+    # 1. Předčištění textu - odstranění balastu a milestonů
+    lines = text.split('\n')
+    filtered_lines = []
+    forbidden = ["milestone-logo", "kurzy", "průběh", "nejsázenější", "statistiky", "moje tikety", "set", "začátek zápasu"]
     
-    # FILTRACE: Odstraníme řádky s logem a rekapitulační řádky (začínající na "Konec")
-    clean_lines = []
-    for l in raw_lines:
-        l_lower = l.lower()
-        # Vynechat logo a pomocné znaky
-        if "milestone-logo" in l_lower or l in [".", ":"]:
+    for l in lines:
+        clean_l = l.strip()
+        if not clean_l or any(f in clean_l.lower() for f in forbidden):
             continue
-        # Vynechat rekapitulaci (Konec zápasu / Konec setu)
-        if l_lower.startswith("konec"):
+        if clean_l.lower().startswith("konec"): # Vynechá "Konec zápasu" i "Konec X. setu"
             continue
-        clean_lines.append(l)
+        filtered_lines.append(clean_l)
 
-    if len(clean_lines) < 2: return None
+    if len(filtered_lines) < 2: return None
+
+    # Jména jsou první dva validní řádky
+    pA_name = normalize_name(filtered_lines[0])
+    pB_name = normalize_name(filtered_lines[1])
+
+    # 2. Slepování rozbitého skóre (číslo : číslo přes více řádků)
+    full_text = " ".join(filtered_lines)
+    # Odstraníme přebytečné mezery kolem dvojteček pro snadnější regex
+    full_text = re.sub(r'\s*:\s*', ':', full_text)
     
-    # Hráči jsou na prvních dvou řádcích po filtraci
-    pA_name = normalize_name(clean_lines[0])
-    pB_name = normalize_name(clean_lines[1])
-    
-    # Sestavíme očištěný text pro hledání skóre (bez rekapitulací)
-    cleaned_text_for_scores = "\n".join(clean_lines)
-    all_scores = re.findall(r'(\d+)\s*:\s*(\d+)', cleaned_text_for_scores)
+    # Najdeme všechna skóre ve formátu ČÍSLO:ČÍSLO
+    # Tento regex ignoruje skóre v závorkách (rekapitulace), pokud by tam zůstaly
+    all_scores = re.findall(r'(\d+):(\d+)', full_text)
     
     if not all_scores: return None
-    
+
+    # Převedeme na čísla
     points = [(int(a), int(b)) for a, b in all_scores]
-    
-    # Srovnání směru času (od nejmenšího po největší)
+
+    # Tipsport řadí od nejnovějšího (11:9) k nejstaršímu (0:0) -> otočíme
     if (points[0][0] + points[0][1]) > (points[-1][0] + points[-1][1]):
         points.reverse()
-        
-    detected_starter = "A" 
-    serve_match = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
-    if serve_match:
-        found_name = normalize_name(serve_match.group(1))
-        if found_name and (found_name in pB_name or pB_name in found_name):
-            detected_starter = "B"
-            
+
+    # 3. Logika unikátní sekvence bodů
     sequence, last_a, last_b, unique_points = [], 0, 0, []
-    for p in points:
-        if not unique_points or p != unique_points[-1]:
-            # Ignorovat chybná data (pokud součet bodů klesne)
-            if unique_points and (p[0] + p[1]) < (unique_points[-1][0] + unique_points[-1][1]): 
+    
+    for a, b in points:
+        # Ignorujeme stavy setů (např. 1:1, 2:1), které se pletou do cesty
+        # Ve stolním tenise set končí 11 (nebo 10:10+). Malá skóre jako 1:1 uprostřed 
+        # výpisu bodů jsou podezřelá, pokud následují po vysokých bodech.
+        if unique_points:
+            prev_sum = unique_points[-1][0] + unique_points[-1][1]
+            curr_sum = a + b
+            if curr_sum <= prev_sum and curr_sum < 4: # Pravděpodobně stav setů (např. 1:2)
                 continue
-            unique_points.append(p)
-            
+        
+        if not unique_points or (a, b) != unique_points[-1]:
+            unique_points.append((a, b))
+
     for a, b in unique_points:
         if a > last_a: sequence.append("A")
         elif b > last_b: sequence.append("B")
         last_a, last_b = a, b
-        
+
+    # Detekce podání
+    detected_starter = "A"
+    if "první podání" in text.lower():
+        serve_match = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
+        if serve_match:
+            found_name = normalize_name(serve_match.group(1))
+            if found_name and (found_name in pB_name or pB_name in found_name):
+                detected_starter = "B"
+
     return {
-        "A": pA_name, 
-        "B": pB_name, 
+        "A": pA_name, "B": pB_name, 
         "score": f"{last_a}:{last_b}", 
         "win": 1 if last_a > last_b else 0, 
-        "sequence": sequence, 
-        "starter": detected_starter
+        "sequence": sequence, "starter": detected_starter
     }
 
 def calculate_elos():
@@ -131,38 +135,35 @@ def calculate_elos():
         elos[pB] -= shift
     return elos
 
-# --- 4. UI ---
-st.set_page_config(page_title="TT STAR PREDICTOR v9.6", layout="wide")
-st.title("🏓 TT STAR - VŠEUMĚL v9.6")
+# --- 4. UI STREAMLIT ---
+st.set_page_config(page_title="TT STAR PREDICTOR v9.7", layout="wide")
+st.title("🏓 TT STAR - VŠEUMĚL v9.7")
 
 tabs = st.tabs(["📥 Vložit data", "🔮 PREDIKCE ZÁPASU", "🏆 Žebříček", "🗑️ Správa dat"])
 
 with tabs[0]:
     st.subheader("📋 Rychlé vložení setu")
-    st.info("Tip: Stačí zkopírovat celý blok textu z Tipsportu včetně 'Konec zápasu' - filtr to vyčistí.")
-    raw_text = st.text_area("Vložte text z Tipsportu:", height=200)
+    st.write("Vložte data jednoho setu (včetně jmen a bodů).")
+    raw_text = st.text_area("Vložte text z Tipsportu:", height=250)
     if st.button("🚀 Uložit do databáze"):
         if raw_text:
             result = parse_live_text(raw_text)
-            if result:
+            if result and len(result["sequence"]) > 0:
                 new_entry = {
                     "id": str(datetime.datetime.now().timestamp()), 
-                    "A": result["A"], 
-                    "B": result["B"], 
-                    "sequence": result["sequence"], 
-                    "starter": result["starter"], 
-                    "win": result["win"], 
-                    "score": result["score"], 
+                    "A": result["A"], "B": result["B"], 
+                    "sequence": result["sequence"], "starter": result["starter"], 
+                    "win": result["win"], "score": result["score"], 
                     "timestamp": str(datetime.datetime.now())
                 }
                 st.session_state.data.append(new_entry)
                 save_data(st.session_state.data)
                 st.success(f"Uloženo: {result['A']} vs {result['B']} ({result['score']})")
             else:
-                st.error("Nepodařilo se rozpoznat data. Zkontrolujte formát.")
+                st.error("Chyba při čtení bodů. Ujistěte se, že kopírujete data pro jeden konkrétní set.")
 
 with tabs[1]:
-    st.subheader("🔮 Analýza a Predikce příštího setu")
+    st.subheader("🔮 Analýza a Predikce")
     elos = calculate_elos()
     c1, c2 = st.columns(2)
     with c1: tA = st.text_input("Hráč A").upper()
@@ -171,37 +172,27 @@ with tabs[1]:
     if tA and tB:
         eA, eB = elos.get(tA, BASE_ELO), elos.get(tB, BASE_ELO)
         stats = predict_stats(eA, eB)
-        
         col_res, col_over = st.columns(2)
         with col_res:
             st.info(f"🏆 Vítěz setu: **{tA if stats['probA'] > stats['probB'] else tB}**")
-            st.write(f"Šance {tA}: {round(stats['probA']*100)}%")
-            st.write(f"Šance {tB}: {round(stats['probB']*100)}%")
-            st.metric("Fair Kurz", round(1/stats['probA'] if stats['probA']>0 else 0, 2))
-        
+            st.write(f"Šance {tA}: {round(stats['probA']*100)}% | Šance {tB}: {round(stats['probB']*100)}%")
         with col_over:
-            st.warning(f"🔢 Body v setu (Over/Under 18.5)")
-            st.write(f"VÍCE než 18.5 bodu: **{round(stats['over18_5']*100)}%**")
-            st.write(f"MÉNĚ než 18.5 bodu: **{round(stats['under18_5']*100)}%**")
-            st.write(f"Odhadované skóre: **{stats['expected_score']}**")
+            st.warning(f"🔢 Body v setu")
+            st.write(f"VÍCE než 18.5: **{round(stats['over18_5']*100)}%**")
+            st.write(f"Odhad skóre: **{stats['expected_score']}**")
 
 with tabs[2]:
     st.subheader("🏆 Elo Žebříček")
     current_elos = calculate_elos()
-    if current_elos:
-        for r, (n, v) in enumerate(sorted(current_elos.items(), key=lambda x: x[1], reverse=True)):
-            st.write(f"{r+1}. **{n}** — {int(v)} Elo")
-    else:
-        st.write("Zatím žádná data v databázi.")
+    for r, (n, v) in enumerate(sorted(current_elos.items(), key=lambda x: x[1], reverse=True)):
+        st.write(f"{r+1}. **{n}** — {int(v)} Elo")
 
 with tabs[3]:
     st.subheader("📜 Historie")
     for i in range(len(st.session_state.data)-1, -1, -1):
-        entry = st.session_state.data[i]
-        st.write(f"{entry.get('timestamp','?')[:16]} | **{entry.get('A','?')}** vs **{entry.get('B','?')}** ({entry.get('score','?')})")
+        e = st.session_state.data[i]
+        st.write(f"{e.get('A')} vs {e.get('B')} | {e.get('score')} | {e.get('timestamp')[:16]}")
         if st.button("Smazat", key=f"del_{i}"):
             st.session_state.data.pop(i)
             save_data(st.session_state.data)
             st.rerun()
-
-st.sidebar.write(f"Sety v paměti: {len(st.session_state.data)}")
