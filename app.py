@@ -1,8 +1,17 @@
 import streamlit as st
+import unicodedata
 import json
 import os
 from collections import Counter
+def normalize_name(name):
 
+    name = name.strip()
+
+    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
+
+    name = " ".join(name.split())
+
+    return name
 DATA_FILE="data.json"
 
 # LOAD DATA
@@ -69,8 +78,8 @@ def parse_tipsport(text):
 
             try:
                 players = line.split("-")
-                A = players[0].strip()
-                B = players[1].strip()
+                A = normalize_name(players[0])
+                B = normalize_name(players[1])
 
                 next_line = lines[i+1]
 
@@ -114,6 +123,34 @@ def parse_tipsport(text):
 parsed = parse_tipsport(text)
 
 if len(parsed) > 0:
+
+    st.success(f"Detected {len(parsed)} matches")
+
+    for m in parsed:
+        st.write(m)
+
+    if st.button("💾 Uložit do modelu"):
+
+        for m in parsed:
+
+            diff = abs(m["oddsA"] - m["oddsB"])
+
+            for s in m["scores"].split(","):
+
+                a,b = s.strip().split(":")
+
+                data.append({
+                    "A":m["A"],
+                    "B":m["B"],
+                    "score":f"{a}:{b}",
+                    "points":int(a)+int(b),
+                    "diff":diff,
+                    "sets":m["sets"]
+                })
+
+        save()
+
+        st.success("✔ data uložená")
 
     st.success(f"Detected {len(parsed)} matches")
 
