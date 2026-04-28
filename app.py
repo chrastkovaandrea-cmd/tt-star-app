@@ -45,35 +45,36 @@ def get_ratings():
         ratings[pB]["rd"] = max(30, math.sqrt(1 / (1/rdB**2 + (q**2 * gA**2 * expA * (1 - expA))**-1)))
     return ratings
 
-# --- UI ---
 t1, t2, t3, t4 = st.tabs(["📥 Vložit", "🔮 Predikce", "🏆 Žebříček", "⚙️ Správa"])
 
 with t1:
-    raw_in = st.text_area("Vložte text zápasu:", height=200, key="input_area")
-    m_first = st.selectbox("Podával v 1. SETU?", ["Hráč 1", "Hráč 2"])
+    raw_in = st.text_area("Vložte připravený text zápasu:", height=150)
+    m_first = st.selectbox("Podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
     if st.button("🚀 ULOŽIT"):
-        if raw_in:
-            try:
-                dt_match = re.search(r'(\d+\.\s*\d+\.\s*\d+)\s*\|\s*(\d+:\d+)', raw_in)
-                ts = f"{dt_match.group(1)} {dt_match.group(2)}" if dt_match else str(datetime.datetime.now().strftime("%d. %m. %Y | %H:%M"))
-                lines = [l.strip() for l in raw_in.split('\n') if l.strip()]
-                names = []
-                for l in lines:
-                    c_l = re.sub(r'[\d\t:|]+', '', l).strip()
-                    if len(c_l) > 4 and "sety" not in c_l.lower(): names.append(normalize_name(c_l))
-                p1_n, p2_n = names[0], names[1]
-                nums = re.findall(r'\d+', raw_in)
-                if dt_match: nums = nums[5:]
-                pts = nums[2:]
-                half = len(pts) // 2
-                p1_p, p2_p = pts[:half], pts[half:]
-                for i in range(len(p1_p)):
-                    start = "A" if (m_first == "Hráč 1" and (i+1)%2 != 0) or (m_first == "Hráč 2" and (i+1)%2 == 0) else "B"
-                    st.session_state.data.append({"A": p1_n, "B": p2_n, "score": f"{p1_p[i]}:{p2_p[i]}", "win": 1 if int(p1_p[i]) > int(p2_p[i]) else 0, "starter": start, "set_num": i+1, "timestamp": ts})
-                save_data(st.session_state.data)
-                st.success("Uloženo!")
-                st.rerun()
-            except: st.error("Chyba formátu! Zkontrolujte text.")
+        try:
+            dt_match = re.search(r'(\d+\.\s*\d+\.\s*\d+)\s*\|\s*(\d+:\d+)', raw_in)
+            ts = f"{dt_match.group(1)} {dt_match.group(2)}" if dt_match else datetime.datetime.now().strftime("%d. %m. %Y | %H:%M")
+            lines = [l.strip() for l in raw_in.split('\n') if l.strip() and "|" not in l]
+            
+            p_data = []
+            for l in lines:
+                nums = re.findall(r'\d+', l)
+                name = re.sub(r'[\d\t:|]+', '', l).strip()
+                if name and nums:
+                    p_data.append({"name": normalize_name(name), "pts": nums})
+            
+            if len(p_data) >= 2:
+                p1, p2 = p_data[0], p_data[1]
+                for i in range(min(len(p1["pts"]), len(p2["pts"]))):
+                    start = "A" if (m_first.startswith("Hráč 1") and (i+1)%2 != 0) or (m_first.startswith("Hráč 2") and (i+1)%2 == 0) else "B"
+                    st.session_state.data.append({
+                        "A": p1["name"], "B": p2["name"], "score": f"{p1['pts'][i]}:{p2['pts'][i]}",
+                        "win": 1 if int(p1['pts'][i]) > int(p2['pts'][i]) else 0,
+                        "starter": start, "set_num": i+1, "timestamp": ts
+                    })
+                save_data(st.session_state.data); st.success("Uloženo!"); st.rerun()
+            else: st.error("Chyba: Nenalezena jména nebo body.")
+        except: st.error("Chyba formátu.")
 
 with t2:
     ratings = get_ratings()
@@ -88,9 +89,8 @@ with t2:
         probA = 1/(1+10**(gB*(rA["r"]-rB["r"])/-400))
         probA = min(max(probA + (0.05 if s_side == "Hráč A" else -0.05), 0.01), 0.99)
         st.metric(f"Šance {pA}", f"{round(probA*100,1)}%")
-        if (probA*kA)-1 > 0: st.success(f"VALUE: +{round(((probA*kA)-1)*100,1)}% (Fair: {round(1/probA,2)})")
         sc = {"3:0": probA**3, "3:1": 3*probA**3*(1-probA), "3:2": 6*probA**3*(1-probA)**2, "0:3": (1-probA)**3, "1:3": 3*(1-probA)**3*probA, "2:3": 6*(1-probA)**3*probA**2}
-        st.write("**Odhady:** " + " | ".join([f"{k}: {round(v*100,0)}%" for k, v in sc.items()]))
+        st.write(" | ".join([f"{k}: {round(v*100,0)}%" for k, v in sc.items()]))
 
 with t3:
     ratings = get_ratings()
@@ -99,20 +99,16 @@ with t3:
         st.dataframe(df.sort_values("Glicko", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
-    st.subheader("⚙️ Správa historie")
-    if st.session_state.data:
-        for i, row in enumerate(st.session_state.data[::-1]):
-            idx = len(st.session_state.data) - 1 - i
-            with st.expander(f"{row['timestamp']} | {row['A']} vs {row['B']} | {row['score']}"):
-                c1, c2, c3 = st.columns(3)
-                new_A = c1.text_input("Hráč A", row['A'], key=f"editA_{idx}")
-                new_B = c2.text_input("Hráč B", row['B'], key=f"editB_{idx}")
-                new_S = c3.text_input("Skóre", row['score'], key=f"editS_{idx}")
-                if st.button("Uložit změny", key=f"save_{idx}"):
-                    st.session_state.data[idx]['A'] = new_A.upper()
-                    st.session_state.data[idx]['B'] = new_B.upper()
-                    st.session_state.data[idx]['score'] = new_S
-                    st.session_state.data[idx]['win'] = 1 if int(new_S.split(':')[0]) > int(new_S.split(':')[1]) else 0
-                    save_data(st.session_state.data); st.rerun()
-                if st.button("Smazat zápas", key=f"del_{idx}"):
-                    st.session_state.data.pop(idx); save_data(st.session_state.data); st.rerun()
+    st.subheader("⚙️ Správa")
+    for i, row in enumerate(st.session_state.data[::-1]):
+        idx = len(st.session_state.data) - 1 - i
+        with st.expander(f"{row['timestamp']} | {row['A']} vs {row['B']} | {row['score']} (Set {row['set_num']})"):
+            c1, c2, c3 = st.columns(3)
+            nA = c1.text_input("Hráč A", row['A'], key=f"a{idx}")
+            nB = c2.text_input("Hráč B", row['B'], key=f"b{idx}")
+            nS = c3.text_input("Skóre", row['score'], key=f"s{idx}")
+            if st.button("Uložit", key=f"save{idx}"):
+                st.session_state.data[idx].update({"A": nA.upper(), "B": nB.upper(), "score": nS, "win": 1 if int(nS.split(':')[0]) > int(nS.split(':')[1]) else 0})
+                save_data(st.session_state.data); st.rerun()
+            if st.button("Smazat", key=f"del{idx}"):
+                st.session_state.data.pop(idx); save_data(st.session_state.data); st.rerun()
