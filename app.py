@@ -8,7 +8,7 @@ import math
 import requests
 from bs4 import BeautifulSoup
 
-# --- 1. NASTAVENÍ A KONSTANTY ---
+# --- 1. NASTAVENÍ ---
 DATA_FILE = "tt_star_ultra_v10.json"
 BASE_RATING = 1500
 BASE_RD = 350 
@@ -36,28 +36,7 @@ def save_data(data):
 if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
-# --- 2. PARSER (Tvůj původní systém) ---
-def parse_live_text(text):
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    set_num = 1
-    s_match = re.search(r'(\d+)\.\s*SET', text, re.IGNORECASE)
-    if s_match: set_num = int(s_match.group(1))
-    forbidden = ["milestone-logo", "kurzy", "průběh", "statistiky", "tikety", "začátek zápasu"]
-    clean = [l for l in lines if not any(f in l.lower() for f in forbidden) and not l.lower().startswith("konec")]
-    if len(clean) < 2: return None
-    pA, pB = normalize_name(clean[0]), normalize_name(clean[1])
-    full = re.sub(r'\s*:\s*', ':', " ".join(clean))
-    scores = re.findall(r'(\d+):(\d+)', full)
-    pts = [(int(a), int(b)) for a, b in scores] if scores else []
-    if pts and (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): pts.reverse()
-    starter = "A"
-    serve_info = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
-    if serve_info:
-        found = normalize_name(serve_info.group(1))
-        starter = "B" if (found in pB or pB in found) else "A"
-    return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}" if pts else "0:0", "win": 1 if pts and pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
-
-# --- 3. GLICKO-2 VÝPOČET ---
+# --- 2. GLICKO-2 VÝPOČET ---
 def calculate_glicko_stats():
     players = {}
     sorted_data = sorted(st.session_state.data, key=lambda x: x.get('timestamp', '0'))
@@ -69,107 +48,104 @@ def calculate_glicko_stats():
             if p not in players: players[p] = {"r": BASE_RATING, "rd": BASE_RD, "matches": 0}
         rA, rdA = players[pA]["r"], players[pA]["rd"]
         rB, rdB = players[pB]["r"], players[pB]["rd"]
+        
+        # Glicko-2 lite
         expected_A = 1 / (1 + 10 ** ((rB - rA) / 400))
         shiftA = (rdA / 10) * (winA - expected_A)
         shiftB = (rdB / 10) * ((1 - winA) - (1 - expected_A))
+        
         players[pA]["r"] += shiftA
         players[pB]["r"] += shiftB
-        players[pA]["rd"] = max(30, rdA - 5)
-        players[pB]["rd"] = max(30, rdB - 5)
+        players[pA]["rd"] = max(30, rdA - 4)
+        players[pB]["rd"] = max(30, rdB - 4)
         players[pA]["matches"] += 1
         players[pB]["matches"] += 1
     return players
 
-# --- 4. OPRAVENÝ SCRAPER ---
-def deep_scrape():
-    url = "https://ttstar.cz/en/results/"
-    # Tato hlavička simuluje skutečný prohlížeč
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1"
-    }
+# --- 3. PREDIKČNÍ FUNKCE ---
+def predict_match(pA_name, pB_name, players_stats):
+    if pA_name not in players_stats or pB_name not in players_stats:
+        return None
+    rA = players_stats[pA_name]['r']
+    rB = players_stats[pB_name]['r']
+    # Pravděpodobnost výhry A
+    prob_A = 1 / (1 + 10 ** ((rB - rA) / 400))
+    return prob_A
+
+# --- 4. DEEP SCRAPER (Vylepšený na proklikávání) ---
+def deep_scrape_v2():
+    base_url = "https://ttstar.cz/en/ttmatch/"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    new_matches = []
     try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code != 200:
-            st.error(f"Web nás odmítl (Chyba {r.status_code})")
-            return []
-            
+        r = requests.get(base_url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
-        new_matches = []
-        rows = soup.find_all('tr')
+        # Najdeme odkazy na turnaje
+        links = [a['href'] for a in soup.find_all('a', href=True) if "results/?id=" in a['href']]
+        links = list(set(links))[:15] # Zkusíme prvních 15 turnajů
         
-        for row in rows:
-            cols = [c.text.strip() for c in row.find_all('td')]
-            if len(cols) >= 5:
-                pA, pB = normalize_name(cols[2]), normalize_name(cols[3])
-                score = cols[4]
-                if ":" in score and pA and pB:
-                    # Kontrola duplicity proti posledním 200 zápasům
-                    if not any(m['A'] == pA and m['B'] == pB and m['score'] == score for m in st.session_state.data[-200:]):
-                        try:
-                            s1, s2 = map(int, score.split(':'))
-                            new_matches.append({
-                                "A": pA, "B": pB, "score": score,
-                                "win": 1 if s1 > s2 else 0,
-                                "timestamp": datetime.datetime.now().isoformat(),
-                                "source": "auto"
-                            })
-                        except: continue
+        p_bar = st.progress(0)
+        for i, link in enumerate(links):
+            full_url = f"https://ttstar.cz{link}" if link.startswith("/") else link
+            res = requests.get(full_url, headers=headers, timeout=5)
+            tsoup = BeautifulSoup(res.text, 'html.parser')
+            for row in tsoup.find_all('tr'):
+                cols = [c.text.strip() for c in row.find_all('td')]
+                if len(cols) >= 5:
+                    pA, pB, score = normalize_name(cols[2]), normalize_name(cols[3]), cols[4]
+                    if ":" in score and pA != "PLAYER":
+                        if not any(m['A'] == pA and m['B'] == pB and m['score'] == score for m in st.session_state.data[-200:]):
+                            try:
+                                s1, s2 = map(int, score.split(':'))
+                                new_matches.append({"A": pA, "B": pB, "score": score, "win": 1 if s1 > s2 else 0, "timestamp": datetime.datetime.now().isoformat()})
+                            except: continue
+            p_bar.progress((i+1)/len(links))
         return new_matches
-    except Exception as e:
-        st.error(f"Chyba při spojení: {e}")
-        return []
+    except: return []
 
-# --- 5. UI STREAMLIT ---
-st.set_page_config(page_title="TT STAR v10.7", layout="wide")
-st.title("🏓 TT STAR - GLICKO-2 ANALYTIK")
+# --- 5. UI ---
+st.set_page_config(page_title="TT STAR v10.8", layout="wide")
+st.title("🏓 TT STAR ANALYTIK")
 
-tabs = st.tabs(["📥 Vložit Set", "🌐 Archiv", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie & Záloha"])
+tabs = st.tabs(["📥 Vložit", "🌐 Archiv", "🔮 Predikce", "🏆 Žebříček", "⚙️ Záloha"])
 
-with tabs[0]: 
-    raw_in = st.text_area("Vložte text z Tipsportu:", height=150)
-    c_d1, c_d2, c_d3 = st.columns(3)
-    res = parse_live_text(raw_in) if raw_in else None
-    with c_d1: m_date = st.date_input("Datum zápasu:", datetime.date.today())
-    with c_d2: m_set = st.number_input("Číslo setu:", 1, 5, value=res['set_num'] if res else 1)
-    with c_d3: m_start = st.selectbox("Kdo začal podávat?", ["A", "B"], index=0 if (res and res['starter']=="A") else 1)
-    
-    if st.button("🚀 Uložit set"):
-        if res:
-            dt = datetime.datetime.combine(m_date, datetime.datetime.now().time())
-            st.session_state.data.append({
-                "id": str(dt.timestamp()), "A": res["A"], "B": res["B"], 
-                "score": res["score"], "win": res["win"], 
-                "starter": m_start, "set_num": m_set, "timestamp": dt.isoformat()
-            })
+p_stats = calculate_glicko_stats()
+
+with tabs[1]: # Archiv
+    if st.button("🚀 DEEP SCAN ARCHIVU"):
+        with st.spinner("Prohledávám turnaje..."):
+            new_data = deep_scrape_v2()
+            st.session_state.data.extend(new_data)
             save_data(st.session_state.data)
-            st.success("Uloženo!")
+            st.success(f"Staženo {len(new_data)} nových zápasů!")
             st.rerun()
 
-with tabs[1]: 
-    st.subheader("🌐 Archivní trénink")
-    if st.button("🚀 SPUSTIT AUTO-TRÉNINK"):
-        with st.spinner("Stahuji data z webu..."):
-            new_stuff = deep_scrape()
-            if new_stuff:
-                st.session_state.data.extend(new_stuff)
-                save_data(st.session_state.data)
-                st.success(f"Úspěch! Přidáno {len(new_stuff)} nových zápasů.")
+with tabs[2]: # Predikce
+    st.subheader("Předpověď zápasu & Value Bet")
+    all_p = sorted(list(p_stats.keys()))
+    c1, c2 = st.columns(2)
+    with c1: pA = st.selectbox("Hráč A (Favorit):", all_p)
+    with c2: pB = st.selectbox("Hráč B (Outsider):", all_p)
+    
+    odds_a = st.number_input("Kurz na A (Tipsport):", value=1.85)
+    
+    if pA and pB and pA != pB:
+        prob = predict_match(pA, pB, p_stats)
+        if prob:
+            st.metric("Pravděpodobnost výhry A", f"{int(prob*100)}%")
+            fair_odds = 1 / prob
+            st.write(f"Férový kurz: **{fair_odds:.2f}**")
+            
+            value = (prob * odds_a) - 1
+            if value > 0:
+                st.success(f"✅ VALUE BET: +{value*100:.1f}% (Kurz je výhodný!)")
             else:
-                st.warning("Nenašel jsem žádné nové zápasy. Buď už je máš všechny stažené, nebo web dočasně blokuje spojení.")
+                st.error(f"❌ BEZ VALUE: {value*100:.1f}% (Kurz je příliš nízký)")
 
-with tabs[3]:
-    p_stats = calculate_glicko_stats()
+with tabs[3]: # Žebříček
     sorted_p = sorted(p_stats.items(), key=lambda x: x[1]['r'], reverse=True)
     for i, (name, s) in enumerate(sorted_p[:30]):
-        st.write(f"{i+1}. **{name}** — Rating: `{int(s['r'])}` | Zápasů: `{s['matches']}` | Nejistota: `{int(s['rd'])}`")
+        st.write(f"{i+1}. **{name}** (Rating: {int(s['r'])}, Zápasy: {s['matches']})")
 
-with tabs[4]: 
-    st.subheader("💾 Záloha a Obnova")
-    uploaded_file = st.file_uploader("Nahrát zálohu (JSON):", type="json")
-    if uploaded_file is not None:
-        st.session_state.data = json.load(uploaded_file)
-        save_data(st.session_state.data)
-        st.success("Data obnovena!")
-        st.rerun()
-    st.divider()
-    st.download_button("📥 STÁHNOUT DATA DO MOBILU", json.dumps(st.session_state.data, indent=4), f"tt_zaloha_{datetime.date.today()}.json")
+with tabs[4]: # Záloha
+    st.download_button("📥 STÁHNOUT JSON ZÁLOHU", json.dumps(st.session_state.data), "tt_zaloha.json")
