@@ -5,15 +5,13 @@ import os
 import re
 import datetime
 import math
-import pandas as pd # Přidáno pro lepší tabulku žebříčku
+import pandas as pd
 
 # --- 1. NASTAVENÍ A DATA ---
 DATA_FILE = "tt_star_ultra_v9.json" 
 BASE_ELO = 1500
 K_FACTOR = 32
 DEFAULT_SERVE_ADV = 0.04
-
-# Glicko konstanty
 BASE_RD = 350 
 
 def normalize_name(name):
@@ -39,7 +37,6 @@ if 'data' not in st.session_state:
     st.session_state.data = load_data()
 
 # --- 2. VÝPOČTOVÉ JÁDRO (ELO + GLICKO) ---
-
 def calculate_advanced_stats():
     elos, glicko, serve_stats, h2h = {}, {}, {}, {}
     now = datetime.datetime.now()
@@ -49,22 +46,17 @@ def calculate_advanced_stats():
         pA, pB = entry.get("A"), entry.get("B")
         score, winA, starter = entry.get("score", "0:0"), entry.get("win", 0), entry.get("starter", "A")
         ts_str = entry.get("timestamp", now.isoformat())
-        
         if not pA or not pB: continue
-        
-        # Inicializace obou systémů
         if pA not in elos: elos[pA] = BASE_ELO
         if pB not in elos: elos[pB] = BASE_ELO
         if pA not in glicko: glicko[pA] = {"r": BASE_ELO, "rd": BASE_RD}
         if pB not in glicko: glicko[pB] = {"r": BASE_ELO, "rd": BASE_RD}
 
-        # --- Původní ELO výpočet ---
         exp_A = 1 / (1 + 10 ** ((elos[pB] - elos[pA]) / 400))
         shift = K_FACTOR * (winA - exp_A)
         elos[pA] += shift
         elos[pB] -= shift
 
-        # --- Nový GLICKO výpočet (přidaný k ELO) ---
         rA, rdA, rB, rdB = glicko[pA]["r"], glicko[pA]["rd"], glicko[pB]["r"], glicko[pB]["rd"]
         ea_g = 1 / (1 + 10 ** ((rB - rA) / 400))
         glicko[pA]["r"] += (rdA / 10) * (winA - ea_g)
@@ -72,20 +64,16 @@ def calculate_advanced_stats():
         glicko[pA]["rd"] = max(30, rdA - 4)
         glicko[pB]["rd"] = max(30, rdB - 4)
 
-        # --- Zbytek tvých statistik ---
         for p, s in [(pA, "A"), (pB, "B")]:
             if p not in serve_stats: serve_stats[p] = {"wins": 0, "total": 0}
             if starter == s:
                 serve_stats[p]["total"] += 1
                 if (s == "A" and winA == 1) or (s == "B" and winA == 0): serve_stats[p]["wins"] += 1
-
         pair = tuple(sorted([pA, pB]))
         if pair not in h2h: h2h[pair] = {pA: 0, pB: 0}
         h2h[pair][pA if winA == 1 else pB] += 1
-
     return elos, glicko, serve_stats, h2h
 
-# --- Ostatní funkce (predict, score_probs) zůstávají beze změny ---
 def predict_advanced(pA, pB, starter, elos, serve_stats, h2h):
     eloA, eloB = elos.get(pA, BASE_ELO), elos.get(pB, BASE_ELO)
     pA_win = 1 / (1 + 10 ** ((eloB - eloA) / 400))
@@ -126,16 +114,10 @@ def parse_live_text(text):
     full = re.sub(r'\s*:\s*', ':', " ".join(clean))
     scores = re.findall(r'(\d+):(\d+)', full)
     pts = [(int(a), int(b)) for a, b in scores] if scores else []
-    if pts and (pts[0][0] + pts[0][1]) > (pts[-1][0] + pts[-1][1]): pts.reverse()
-    starter = "A"
-    serve_info = re.search(r'první podání\s+([A-Z][a-z]?\.[A-Za-zÁ-ž]+|[A-Za-zÁ-ž]+)', text, re.IGNORECASE)
-    if serve_info:
-        found = normalize_name(serve_info.group(1))
-        starter = "B" if (found in pB or pB in found) else "A"
-    return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}" if pts else "0:0", "win": 1 if pts and pts[-1][0] > pts[-1][1] else 0, "starter": starter, "set_num": set_num}
+    return {"A": pA, "B": pB, "score": f"{pts[-1][0]}:{pts[-1][1]}" if pts else "0:0", "win": 1 if pts and pts[-1][0] > pts[-1][1] else 0, "set_num": set_num}
 
 # --- 4. UI ---
-st.set_page_config(page_title="TT STAR v12.4 ULTRA", layout="wide")
+st.set_page_config(page_title="TT STAR v12.5 ULTRA", layout="wide")
 st.title("🏓 TT STAR - ULTRA ANALYTIK")
 
 t1, t2, t3, t4 = st.tabs(["📥 Vložit Set", "🔮 Predikce & Value", "🏆 Žebříček", "⚙️ Historie"])
@@ -145,15 +127,18 @@ with t1:
     c_d1, c_d2, c_d3 = st.columns(3)
     res = parse_live_text(raw_in) if raw_in else None
     with c_d1: m_date = st.date_input("Datum zápasu:", datetime.date.today())
-    with c_d2: m_set = st.number_input("Číslo setu:", 1, 5, value=res['set_num'] if res else 1)
+    with c_d2: m_set = st.number_input("Tento set č.:", 1, 5, value=res['set_num'] if res else 1)
     
-    # --- TVOJE LOGIKA PODÁNÍ ---
-    m_first_match = st.selectbox("Kdo podával v 1. SETU?", ["A", "B"])
-    # Výpočet pro aktuální set
-    if m_set % 2 != 0: current_starter = m_first_match
-    else: current_starter = "B" if m_first_match == "A" else "A"
+    # TVOJE POŽADOVANÁ LOGIKA STŘÍDÁNÍ:
+    with c_d3: m_first_match = st.selectbox("Kdo podával v 1. SETU zápasu?", ["A", "B"])
     
-    st.info(f"V {m_set}. setu automaticky podává: **Hráč {current_starter}**")
+    # Výpočet: pokud je set lichý (1,3,5), podává ten co v prvním. Pokud sudý (2,4), podává ten druhý.
+    if m_set % 2 != 0: 
+        current_starter = m_first_match
+    else: 
+        current_starter = "B" if m_first_match == "A" else "A"
+    
+    st.warning(f"V {m_set}. setu automaticky podává: **Hráč {current_starter}**")
 
     if st.button("🚀 Uložit set"):
         if res:
@@ -167,12 +152,10 @@ with t2:
     col_in1, col_in2 = st.columns(2)
     with col_in1: pA_in = st.text_input("Hráč A").upper()
     with col_in2: pB_in = st.text_input("Hráč B").upper()
-    
     col_p1, col_p2, col_p3 = st.columns(3)
     with col_p1: final_s = st.radio("Podává v tomto setu:", ["A", "B"])
     with col_p2: oddsA = st.number_input("Aktuální kurz na vítěze A:", 1.0, 10.0, 1.85)
     with col_p3: oddsO = st.number_input("Aktuální kurz na Over 18.5:", 1.0, 10.0, 1.85)
-
     if pA_in and pB_in:
         pA_w, p_ov = predict_advanced(pA_in, pB_in, final_s, cur_elos, cur_serve, cur_h2h)
         v1, v2 = st.columns(2)
@@ -188,41 +171,18 @@ with t2:
 with t3:
     st.subheader("Žebříček (Elo & Glicko)")
     elos, glicko, _, _ = calculate_advanced_stats()
-    # Spojení do jedné tabulky
     rows = []
     for p in elos:
-        rows.append({
-            "Hráč": p, 
-            "Elo": int(elos[p]), 
-            "Glicko": int(glicko[p]["r"]), 
-            "Spolehlivost (RD)": int(glicko[p]["rd"])
-        })
+        rows.append({"Hráč": p, "Elo": int(elos[p]), "Glicko": int(glicko[p]["r"]), "RD (Jistota)": int(glicko[p]["rd"])})
     df = pd.DataFrame(rows).sort_values("Glicko", ascending=False)
     st.dataframe(df, use_container_width=True)
 
 with t4:
     st.subheader("⚙️ Správa Historie")
-    # --- TLAČÍTKO PRO ZÁLOHU DO MOBILU ---
-    st.download_button(
-        label="📥 STÁHNOUT ZÁLOHU DO MOBILU",
-        data=json.dumps(st.session_state.data, indent=4),
-        file_name=f"tt_zaloha_{datetime.date.today()}.json",
-        mime="application/json",
-    )
+    st.download_button(label="📥 STÁHNOUT ZÁLOHU DO MOBILU", data=json.dumps(st.session_state.data, indent=4), file_name=f"tt_backup.json", mime="application/json")
     st.divider()
-    
     for i in range(len(st.session_state.data)-1, -1, -1):
         d = st.session_state.data[i]
-        ts_val = datetime.datetime.fromisoformat(d.get('timestamp', datetime.datetime.now().isoformat()))
         with st.expander(f"📝 {d['A']} vs {d['B']} ({d['score']})"):
-            c_e1, c_e2 = st.columns(2)
-            with c_e1:
-                new_A = st.text_input("Hráč A", d['A'], key=f"nA_{i}").upper()
-                new_B = st.text_input("Hráč B", d['B'], key=f"nB_{i}").upper()
-                new_score = st.text_input("Skóre", d['score'], key=f"nS_{i}")
-            with c_e2:
-                if st.button("💾 Uložit změny", key=f"sv_{i}"):
-                    st.session_state.data[i].update({"A": new_A, "B": new_B, "score": new_score})
-                    save_data(st.session_state.data); st.rerun()
-                if st.button("🗑️ Smazat", key=f"dl_{i}"):
-                    st.session_state.data.pop(i); save_data(st.session_state.data); st.rerun()
+            if st.button("💾 Uložit", key=f"sv_{i}"): save_data(st.session_state.data); st.rerun()
+            if st.button("🗑️ Smazat", key=f"dl_{i}"): st.session_state.data.pop(i); save_data(st.session_state.data); st.rerun()
