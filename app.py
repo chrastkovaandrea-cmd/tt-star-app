@@ -63,14 +63,14 @@ def smart_extract_from_text(text):
         if match:
             pA, pB, score = normalize_name(match.group(1)), normalize_name(match.group(2)), match.group(3)
             if pA and pB and ":" in score:
-                if not any(d['A'] == pA and d['B'] == pB and d['score'] == score for d in st.session_state.data[-300:]):
+                if not any(d['A'] == pA and d['B'] == pB and d['score'] == score for d in st.session_state.data[-500:]):
                     try:
                         s1, s2 = map(int, score.split(':'))
                         new_entries.append({"A": pA, "B": pB, "score": score, "win": 1 if s1 > s2 else 0, "timestamp": datetime.datetime.now().isoformat(), "source": "bulk"})
                     except: continue
     return new_entries
 
-# --- 3. GLICKO-2 VÝPOČET ---
+# --- 3. VÝPOČET GLICKO ---
 def calculate_glicko_stats():
     players = {}
     sorted_data = sorted(st.session_state.data, key=lambda x: x.get('timestamp', '0'))
@@ -88,80 +88,88 @@ def calculate_glicko_stats():
         players[pA]["matches"] += 1; players[pB]["matches"] += 1
     return players
 
-# --- 4. UI ---
-st.set_page_config(page_title="TT STAR ULTRA v11.3", layout="wide")
+# --- 4. UI STREAMLIT ---
+st.set_page_config(page_title="TT STAR ULTRA v11.4", layout="wide")
 st.title("🏓 TT STAR - MASTER ANALYTIK")
 
 tabs = st.tabs(["📥 Vložit Set", "🌐 Archivní Vklad", "🔮 Predikce", "🏆 Žebříček", "⚙️ Historie & Záloha"])
 
 p_stats = calculate_glicko_stats()
 
-with tabs[0]: 
-    st.subheader("Detailní vklad setu (Tipsport)")
-    raw_in = st.text_area("Vložte text:", height=100)
+# --- T1: VLOŽIT SET ---
+with tabs[0]:
+    st.subheader("Detailní vklad z Tipsportu")
+    raw_in = st.text_area("Vložte text:", height=100, key="in_manual")
     res = parse_live_text(raw_in) if raw_in else None
     col1, col2, col3 = st.columns(3)
     with col1: m_date = st.date_input("Datum:", datetime.date.today())
     with col2: m_set = st.number_input("Set č.:", 1, 5, value=res['set_num'] if res else 1)
-    with col3: m_serve = st.selectbox("Podával jako první:", ["A", "B"], index=0 if (res and res['starter']=="A") else 1)
+    with col3: m_serve = st.selectbox("Podával první:", ["A", "B"], index=0 if (res and res['starter']=="A") else 1)
     if st.button("🚀 ULOŽIT SET"):
         if res:
             dt = datetime.datetime.combine(m_date, datetime.datetime.now().time())
             st.session_state.data.append({"A": res["A"], "B": res["B"], "score": res["score"], "win": res["win"], "starter": m_serve, "set_num": m_set, "timestamp": dt.isoformat(), "source": "manual"})
             save_data(st.session_state.data)
-            st.success("Uloženo!")
-            st.rerun()
+            st.success("Uloženo!"); st.rerun()
 
+# --- T2: ARCHIVNÍ VKLAD ---
 with tabs[1]:
     st.subheader("Hromadný vklad z webu")
-    bulk_text = st.text_area("Vlož zkopírovaný text z TT Star Results:", height=200)
+    bulk_text = st.text_area("Vlož zkopírovaný text z TT Star Results:", height=200, key="in_bulk")
     if st.button("📥 ZPRACOVAT A PŘIDAT"):
         extracted = smart_extract_from_text(bulk_text)
         st.session_state.data.extend(extracted)
         save_data(st.session_state.data)
-        st.success(f"Přidáno {len(extracted)} zápasů!")
-        st.rerun()
+        st.success(f"Přidáno {len(extracted)} zápasů!"); st.rerun()
 
-with tabs[4]: 
-    st.subheader("📜 Historie a správa dat")
-    # Historie s úpravami a mazáním
+# --- T3: PREDIKCE ---
+with tabs[2]:
+    st.subheader("Předpověď & Value Bet")
+    all_p = sorted(list(p_stats.keys()))
+    if len(all_p) >= 2:
+        c1, c2 = st.columns(2)
+        with c1: pA = st.selectbox("Hráč A:", all_p); odds = st.number_input("Kurz na A:", value=1.85)
+        with c2: pB = st.selectbox("Hráč B:", all_p)
+        if pA != pB:
+            rA, rB = p_stats[pA]['r'], p_stats[pB]['r']
+            prob = 1 / (1 + 10 ** ((rB - rA) / 400))
+            st.metric(f"Šance {pA}", f"{int(prob*100)}%")
+            val = (prob * odds) - 1
+            if val > 0: st.success(f"✅ VALUE: +{val*100:.1f}%")
+            else: st.error("❌ BEZ VALUE")
+    else: st.warning("Málo dat pro predikci.")
+
+# --- T4: ŽEBŘÍČEK ---
+with tabs[3]:
+    st.subheader("Aktuální Rating (Glicko-2)")
+    if p_stats:
+        sorted_p = sorted(p_stats.items(), key=lambda x: x[1]['r'], reverse=True)
+        df = pd.DataFrame([{"Jméno": k, "Rating": int(v['r']), "Zápasy": v['matches']} for k, v in sorted_p])
+        st.dataframe(df, use_container_width=True)
+    else: st.info("Žebříček je zatím prázdný.")
+
+# --- T5: HISTORIE & ZÁLOHA ---
+with tabs[4]:
+    st.subheader("📜 Historie a Úpravy")
     if st.session_state.data:
         reversed_data = list(enumerate(st.session_state.data))
         reversed_data.reverse()
         for idx, entry in reversed_data[:15]:
-            with st.expander(f"{entry['A']} vs {entry['B']} ({entry['score']}) - {entry.get('source','?')}"):
+            with st.expander(f"{entry['A']} vs {entry['B']} ({entry['score']})"):
                 c1, c2, c3 = st.columns(3)
-                editA = c1.text_input("Hráč A", entry['A'], key=f"eA_{idx}")
-                editB = c2.text_input("Hráč B", entry['B'], key=f"eB_{idx}")
-                editS = c3.text_input("Skóre", entry['score'], key=f"eS_{idx}")
-                cc1, cc2 = st.columns(2)
-                if cc1.button("💾 Uložit", key=f"s_{idx}"):
-                    st.session_state.data[idx].update({"A": normalize_name(editA), "B": normalize_name(editB), "score": editS})
+                edA = c1.text_input("Hráč A", entry['A'], key=f"edA_{idx}")
+                edB = c2.text_input("Hráč B", entry['B'], key=f"edB_{idx}")
+                edS = c3.text_input("Skóre", entry['score'], key=f"edS_{idx}")
+                if st.button("Uložit změny", key=f"btnsave_{idx}"):
+                    st.session_state.data[idx].update({"A": normalize_name(edA), "B": normalize_name(edB), "score": edS})
                     save_data(st.session_state.data); st.rerun()
-                if cc2.button("🗑️ Smazat", key=f"d_{idx}"):
+                if st.button("Smazat", key=f"btndel_{idx}"):
                     st.session_state.data.pop(idx); save_data(st.session_state.data); st.rerun()
 
     st.divider()
-    st.subheader("💾 Export a Import (Záloha celé databáze)")
-    st.info(f"Aktuálně je v databázi celkem {len(st.session_state.data)} záznamů.")
-    
-    # Tlačítko pro stažení VŠECH dat (ručních i z archivu)
-    full_json = json.dumps(st.session_state.data, indent=4)
-    st.download_button(
-        label="📥 STÁHNOUT KOMPLETNÍ DATABÁZI (JSON)",
-        data=full_json,
-        file_name=f"tt_star_full_backup_{datetime.date.today()}.json",
-        mime="application/json"
-    )
-
-    if st.button("💾 PEVNĚ ULOŽIT NA SERVER"):
-        save_data(st.session_state.data)
-        st.success("Všechna data byla uložena do souboru na serveru.")
-
-    st.divider()
-    up = st.file_uploader("Nahrát databázi ze souboru (Obnova):", type="json")
+    st.subheader("💾 Export databáze")
+    st.download_button("📥 STÁHNOUT KOMPLETNÍ JSON", json.dumps(st.session_state.data, indent=4), f"tt_full_backup.json")
+    up = st.file_uploader("Nahrát zálohu (JSON)", type="json")
     if up:
         st.session_state.data = json.load(up)
-        save_data(st.session_state.data)
-        st.success("Databáze byla úspěšně obnovena!")
-        st.rerun()
+        save_data(st.session_state.data); st.rerun()
