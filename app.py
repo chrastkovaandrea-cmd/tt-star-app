@@ -147,4 +147,10 @@ with t2:
 with t3:
     ratings = get_glicko()
     if ratings:
-        df = pd.DataFrame([{"Hráč": k, "Glicko": int(v["r"]), "RD (Stabilita)": int(v["rd"])} for k
+        df = pd.DataFrame([{"Hráč": k, "Glicko": int(v["r"]), "RD (Stabilita)": int(v["rd"])} for k, v in ratings.items()])
+        st.dataframe(df.sort_values("Glicko", ascending=False), use_container_width=True)
+
+with t4:
+    st.download_button("📥 ZÁLOHA DAT (JSON)", data=json.dumps(st.session_state.data), file_name="tt_data.json")
+    up = st.file_uploader("📤 NAHRÁT ZÁLOHU", type="json")
+    if up: st.session_state.data = json.load(up); save_data(st.session_state.data); st.rerun()
