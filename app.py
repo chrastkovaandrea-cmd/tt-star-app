@@ -1,7 +1,6 @@
 import streamlit as st
 import json, os, re, datetime, math, unicodedata
 import pandas as pd
-from io import BytesIO
 
 # --- CONFIG ---
 DATA_FILE = "tt_star_ultra_v10.json"
@@ -34,7 +33,7 @@ def get_ratings():
         expA = 1 / (1 + 10**(gB * (rA - rB) / -400))
         dA = (q**2 * gB**2 * expA * (1 - expA))**-1
         ratings[pA]["r"] += (q / (1/rdA**2 + 1/dA)) * gB * (winA - expA)
-        ratings[pA]["rd"] = max(30, math.sqrt(1 / (1/rdA**2 + 1/dA)))
+        ratings[pA]["rd"] = max(30, math.sqrt(1 / (1/rdA**2 + (q**2 * gB**2 * expA * (1 - expA))**-1)))
         ratings[pA]["count"] += 1
         gA = 1 / math.sqrt(1 + 3 * (q * rdA / math.pi)**2)
         ratings[pB]["r"] += (q / (1/rdB**2 + (q**2 * gA**2 * expA * (1 - expA))**-1)) * gA * ((1-winA) - (1-expA))
@@ -45,9 +44,9 @@ def get_ratings():
 t1, t2, t3, t4 = st.tabs(["📥 Vkládání", "🔮 Predikce & Live", "🏆 Žebříček", "⚙️ Správa & Export"])
 
 with t1:
-    raw_in = st.text_area("Vložte text zápasu (jména a body):", height=150, placeholder="KOBLIZEK 11 6 11\nMARTINKO 8 11 6")
+    raw_in = st.text_area("Vložte text zápasu (jména a body):", height=150)
     m_first = st.selectbox("Kdo podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
-    if st.button("🚀 ULOŽIT DO HISTORIE"):
+    if st.button("🚀 ULOŽIT"):
         try:
             lines = [l.strip() for l in raw_in.split('\n') if l.strip() and "|" not in l]
             p_data = []
@@ -64,57 +63,37 @@ with t1:
 
 with t2:
     ratings = get_ratings()
-    c1, c2 = st.columns(2)
-    pA = c1.selectbox("Hráč A", sorted(list(ratings.keys()))) if ratings else c1.text_input("Hráč A")
-    pB = c2.selectbox("Hráč B", sorted(list(ratings.keys()))) if ratings else c2.text_input("Hráč B")
-    
-    col1, col2, col3 = st.columns(3)
-    s_side = col1.radio("Kdo podává PRÁVĚ TEĎ?", ["Hráč A", "Hráč B"])
-    kA = col2.number_input("Kurz na A", 1.01, 10.0, 1.85)
-    kO = col3.number_input("Kurz Over 18.5", 1.01, 10.0, 1.85)
+    pA = st.selectbox("Hráč A", sorted(list(ratings.keys()))) if ratings else st.text_input("Hráč A")
+    pB = st.selectbox("Hráč B", sorted(list(ratings.keys()))) if ratings else st.text_input("Hráč B")
+    s_side = st.radio("Kdo podává?", ["Hráč A", "Hráč B"])
+    kO = st.number_input("Kurz Over 18.5", 1.01, 10.0, 1.85)
     
     if pA and pB and pA != pB:
         rA, rB = ratings.get(pA, {"r":1500,"rd":350}), ratings.get(pB, {"r":1500,"rd":350})
         q = math.log(10)/400; gB = 1/math.sqrt(1+3*(q*rB["rd"]/math.pi)**2)
         probA = 1/(1+10**(gB*(rA["r"]-rB["r"])/-400))
-        # Bonus za podání (5%)
         probA = min(max(probA + (0.05 if s_side == "Hráč A" else -0.05), 0.01), 0.99)
-        
-        st.metric(f"Vítězství {pA}", f"{round(probA*100,1)}%")
-        
-        # Simulace setů pro Over 18.5
         sc = {"3:0": probA**3, "3:1": 3*probA**3*(1-probA), "3:2": 6*probA**3*(1-probA)**2, "0:3": (1-probA)**3, "1:3": 3*(1-probA)**3*probA, "2:3": 6*(1-probA)**3*probA**2}
         pOver = (sc["3:1"]*0.65) + (sc["1:3"]*0.65) + sc["3:2"] + sc["2:3"]
-        
-        c_v1, c_v2 = st.columns(2)
-        with c_v1:
-            st.write(f"**Over 18.5 bodů:** {round(pOver*100,1)}%")
-            if (pOver*kO) > 1: st.success(f"VALUE OVER: +{round(((pOver*kO)-1)*100,1)}%")
-        with c_v2:
-            st.write("**Přesné skóre:**")
-            st.write(" | ".join([f"{k}: {round(v*100,0)}%" for k, v in sc.items()]))
+        st.metric(f"Šance {pA}", f"{round(probA*100,1)}%")
+        st.write(f"**Over 18.5:** {round(pOver*100,1)}% " + (f"✅ VALUE" if (pOver*kO)>1 else ""))
 
 with t3:
     ratings = get_ratings()
-    search = st.text_input("🔍 Hledat hráče")
+    search = st.text_input("🔍 Hledat")
     if ratings:
-        df = pd.DataFrame([{"Hráč": k, "Glicko": int(v["r"]), "RD": int(v["rd"]), "Zápasů": v["count"]} for k, v in ratings.items()])
+        df = pd.DataFrame([{"Hráč": k, "Glicko": int(v["r"]), "RD": int(v["rd"]), "Z": v["count"]} for k, v in ratings.items()])
         if search: df = df[df['Hráč'].str.contains(search.upper())]
         st.dataframe(df.sort_values("Glicko", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
     if st.session_state.data:
-        df_exp = pd.DataFrame(st.session_state.data)
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_exp.to_excel(writer, index=False)
-        st.download_button("📥 EXPORT DO EXCELU", data=output.getvalue(), file_name="tt_star_data.xlsx")
-        
+        csv = pd.DataFrame(st.session_state.data).to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 STÁHNOUT DATA (CSV pro Excel)", data=csv, file_name="tt_star_data.csv", mime="text/csv")
         if st.button("🗑️ SMAZAT VŠE"):
-            if st.checkbox("Potvrdit smazání"): st.session_state.data = []; save_data([]); st.rerun()
-
+            if st.checkbox("Opravdu?"): st.session_state.data = []; save_data([]); st.rerun()
     st.write("---")
     for i, row in enumerate(st.session_state.data[::-1]):
         idx = len(st.session_state.data) - 1 - i
-        with st.expander(f"{row['timestamp']} | {row['A']} vs {row['B']} | {row['score']} | Podával: {row['A'] if row['starter']=='A' else row['B']}"):
+        with st.expander(f"{row['A']} vs {row['B']} ({row['score']})"):
             if st.button("Smazat", key=f"d{idx}"): st.session_state.data.pop(idx); save_data(st.session_state.data); st.rerun()
