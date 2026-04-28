@@ -1,164 +1,106 @@
 import streamlit as st
-import json
-import os
-import random
+import json, os, datetime, math, re, unicodedata
 
 DATA_FILE = "tt_data.json"
+BASE_ELO = 1500
+K = 32
+
+# =========================
+# NORMALIZE
+# =========================
+def norm(x):
+    x = unicodedata.normalize('NFKD', x).encode('ASCII','ignore').decode()
+    return x.strip().upper()
 
 # =========================
 # LOAD / SAVE
 # =========================
-def load_data():
+def load():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
+        return json.load(open(DATA_FILE))
     return []
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+def save(d):
+    json.dump(d, open(DATA_FILE,"w"))
 
 if "data" not in st.session_state:
-    st.session_state.data = load_data()
+    st.session_state.data = load()
 
 # =========================
-# POINT MODEL
+# ELO
 # =========================
-def point_prob(A, B):
-    winsA = 0
-    total = 0
-
+def calc_elo():
+    elo={}
     for d in st.session_state.data:
-        if d["A"] == A or d["B"] == A:
-            total += 1
-            if d["A"] == A and d["win"] == 1:
-                winsA += 1
-            if d["B"] == A and d["win"] == 0:
-                winsA += 1
+        A,B=d["A"],d["B"]
+        w=d["win"]
 
-    if total == 0:
-        return 0.5
+        if A not in elo: elo[A]=BASE_ELO
+        if B not in elo: elo[B]=BASE_ELO
 
-    return winsA / total
-
-# =========================
-# SIMULACE SETU
-# =========================
-def simulate_set(pA):
-
-    a = 0
-    b = 0
-
-    while True:
-        if random.random() < pA:
-            a += 1
-        else:
-            b += 1
-
-        if (a >= 11 or b >= 11) and abs(a - b) >= 2:
-            return a, b
+        EA=1/(1+10**((elo[B]-elo[A])/400))
+        elo[A]+=K*(w-EA)
+        elo[B]+=K*((1-w)-(1-EA))
+    return elo
 
 # =========================
-# MONTE CARLO
+# PARSER (Tipsport)
 # =========================
-def monte_carlo(pA, sims=500):
+def parse(text):
 
-    results = {}
+    lines=[l.strip() for l in text.split("\n") if l.strip()]
 
-    for _ in range(sims):
-        a,b = simulate_set(pA)
-        score = f"{a}:{b}"
-        results[score] = results.get(score, 0) + 1
+    if len(lines)<3:
+        return None
 
-    total = sum(results.values())
+    A=norm(lines[0])
+    B=norm(lines[1])
 
-    return sorted([(k, v/total) for k,v in results.items()],
-                  key=lambda x: x[1],
-                  reverse=True)[:5]
+    scores=re.findall(r'(\d+):(\d+)', text)
+
+    if not scores:
+        return None
+
+    last=scores[-1]
+
+    return {
+        "A":A,
+        "B":B,
+        "score":f"{last[0]}:{last[1]}",
+        "win":1 if int(last[0])>int(last[1]) else 0
+    }
+
+# =========================
+# PREDIKCE
+# =========================
+def prob(A,B,elo):
+    return 1/(1+10**((elo.get(B,1500)-elo.get(A,1500))/400))
 
 # =========================
 # UI
 # =========================
-st.title("🏓 TT STAR LIVE EDGE")
+st.title("🏓 TT STAR PRO")
 
-tab1, tab2, tab3 = st.tabs(["➕ Data", "🔥 LIVE EDGE", "💾 Data"])
-
-# =========================
-# DATA
-# =========================
-with tab1:
-
-    A = st.text_input("Hráč A")
-    B = st.text_input("Hráč B")
-
-    score = st.text_input("Skóre (např 11:8)")
-
-    if st.button("ULOŽIT"):
-
-        try:
-            a,b = map(int, score.split(":"))
-            win = 1 if a>b else 0
-
-            st.session_state.data.append({
-                "A": A.upper(),
-                "B": B.upper(),
-                "win": win
-            })
-
-            save_data(st.session_state.data)
-            st.success("ULOŽENO")
-
-        except:
-            st.error("Chyba")
+t1,t2,t3,t4=st.tabs(["📥 Vložit","🔮 Predikce","🏆 Žebříček","⚙️ Historie"])
 
 # =========================
-# LIVE EDGE
+# TAB 1
 # =========================
-with tab2:
+with t1:
 
-    st.subheader("LIVE predikce")
+    txt=st.text_area("Vlož text z Tipsportu")
 
-    A = st.text_input("Player A")
-    B = st.text_input("Player B")
+    if st.button("➕ Načíst"):
+        r=parse(txt)
 
-    score_live = st.text_input("Aktuální skóre (např 6:5)")
+        if r:
+            st.session_state.tmp=r
+            st.success("OK")
 
-    odds = st.number_input("Kurz na A", 1.0, 10.0, 1.8)
+    if "tmp" in st.session_state:
 
-    if A and B:
+        r=st.session_state.tmp
 
-        pA = point_prob(A.upper(), B.upper())
+        st.write(r)
 
-        st.write("📊 Pravděpodobnost bodu:", round(pA,3))
-
-        # SIMULACE
-        sims = monte_carlo(pA)
-
-        st.write("🎯 Nejčastější výsledky:")
-        for s,p in sims:
-            st.write(s, round(p*100,1), "%")
-
-        # EV
-        ev = pA * odds - 1
-
-        st.write("💰 EV:", round(ev,3))
-
-# =========================
-# DATA MANAGEMENT
-# =========================
-with tab3:
-
-    st.write("Počet:", len(st.session_state.data))
-
-    st.download_button(
-        "📥 Stáhnout",
-        json.dumps(st.session_state.data),
-        file_name="tt.json"
-    )
-
-    file = st.file_uploader("📤 Upload", type=["json"])
-
-    if file:
-        st.session_state.data = json.load(file)
-        save_data(st.session_state.data)
-        st.success("Nahráno")
+        if
