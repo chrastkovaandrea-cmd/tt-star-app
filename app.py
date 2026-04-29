@@ -85,17 +85,22 @@ with t1:
                 o1, o2 = (odds_raw[0], odds_raw[1]) if len(odds_raw) >= 2 else ("0", "0")
                 ts = parts[2].strip() if len(parts) > 2 else datetime.datetime.now().strftime("%d.%m. %H:%M")
                 
-                added_count = 0
+                temp_new_sets = []
                 skip_count = 0
 
-                # Cyklus pro zpracování všech setů
                 for i, s in enumerate(sets):
+                    # Určení podávajícího
+                    if (i + 1) % 2 != 0:
+                        starter = "A" if "Hráč 1" in m_first else "B"
+                    else:
+                        starter = "B" if "Hráč 1" in m_first else "A"
+                        
                     new_set = {
-                        "A": p1_n, "B": p2_n, "score": s.strip(),
-                        "starter": ("A" if "Hráč 1" in m_first else "B") if (i+1)%2 != 0 else ("B" if "Hráč 1" in m_first else "A"),
-                        "timestamp": ts, "odds": f"{o1}/{o2}"
+                        "A": p1_n, "B": p2_n, "score": s.strip().replace('-', ':'),
+                        "starter": starter, "timestamp": ts, "odds": f"{o1}/{o2}"
                     }
                     
+                    # Kontrola, zda přesně tento set už v datech je
                     is_dup = any(
                         d['A'] == new_set['A'] and 
                         d['B'] == new_set['B'] and 
@@ -105,22 +110,24 @@ with t1:
                     )
                     
                     if not is_dup:
-                        st.session_state.data.append(new_set)
-                        added_count += 1
+                        temp_new_sets.append(new_set)
                     else:
                         skip_count += 1
 
-                # Uložení a refresh proběhne až po dokončení celého cyklu setů
-                if added_count > 0:
+                # Uložení všech unikátních setů najednou
+                if temp_new_sets:
+                    st.session_state.data.extend(temp_new_sets)
                     save_data(st.session_state.data)
-                    st.success(f"Uloženo {added_count} setů!")
+                    st.success(f"Uloženo {len(temp_new_sets)} nových setů!")
+                    if skip_count > 0:
+                        st.info(f"Vynecháno {skip_count} duplicit.")
                     clear_input()
                     st.rerun()
-                elif skip_count > 0:
-                    st.warning(f"Všechny sety ({skip_count}) už v databázi jsou.")
+                else:
+                    st.warning("Všechny tyto sety už v databázi máš.")
 
             except Exception as e: 
-                st.error(f"Chyba formátu textu: {e}")
+                st.error(f"Chyba při zpracování: {e}")
 
 with t2:
     ratings = get_ratings()
