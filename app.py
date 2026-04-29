@@ -59,15 +59,24 @@ t1, t2, t3, t4 = st.tabs(["📥 Vložit Zápas", "🔮 Predikce & Value", "🏆 
 
 with t1:
     if "input_val" not in st.session_state: st.session_state.input_val = ""
-    def clear_input(): st.session_state.input_val = ""
+    
+    def clear_input():
+        st.session_state.input_val = ""
+        if "txt_area" in st.session_state:
+            st.session_state.txt_area = ""
+
     raw_in = st.text_area("Vlož text od Gemini:", value=st.session_state.input_val, height=100, key="txt_area")
+    
     c_del, _ = st.columns([1, 4])
     c_del.button("🗑️ Smazat text", on_click=clear_input)
+
     m_first = st.selectbox("Kdo podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
+    
     if st.button("🚀 ULOŽIT ZÁPAS"):
-        if st.session_state.txt_area:
+        current_input = st.session_state.txt_area
+        if current_input:
             try:
-                parts = st.session_state.txt_area.split('|')
+                parts = current_input.split('|')
                 names = parts[0].split('-')
                 p1_n, p2_n = normalize_name(names[0]), normalize_name(names[1])
                 sets_raw = re.search(r'\((.*?)\)', parts[1]).group(1)
@@ -81,7 +90,9 @@ with t1:
                         "starter": ("A" if "Hráč 1" in m_first else "B") if (i+1)%2 != 0 else ("B" if "Hráč 1" in m_first else "A"),
                         "timestamp": ts, "odds": f"{o1}/{o2}"
                     })
-                save_data(st.session_state.data); st.session_state.input_val = ""; st.success("Uloženo!"); st.rerun()
+                save_data(st.session_state.data)
+                clear_input()
+                st.success("Uloženo!"); st.rerun()
             except: st.error("Chyba formátu textu.")
 
 with t2:
@@ -121,20 +132,4 @@ with t4:
     if up and st.button("✅ NAHRÁT DATA"):
         try:
             df_up = pd.read_csv(up); st.session_state.data = df_up.to_dict('records')
-            save_data(st.session_state.data); st.success("Data byla nahrána!"); st.rerun()
-        except: st.error("Chyba při nahrávání.")
-    st.write("---")
-    st.subheader("🕒 Historie a úpravy")
-    for i, row in enumerate(st.session_state.data[::-1]):
-        idx = len(st.session_state.data) - 1 - i
-        # TADY JE TA ZMĚNA: Jasně napsané "Podával:"
-        who_served = row['A'] if row['starter'] == 'A' else row['B']
-        with st.expander(f"{row['A']} - {row['B']} | {row['score']} | Podával: {who_served}"):
-            c1, c2, c3 = st.columns(3)
-            newA, newB, newS = c1.text_input("Hráč A", row['A'], key=f"a{idx}"), c2.text_input("Hráč B", row['B'], key=f"b{idx}"), c3.text_input("Skóre", row['score'], key=f"s{idx}")
-            cb1, cb2 = st.columns(2)
-            if cb1.button("Uložit změny", key=f"sv{idx}"):
-                st.session_state.data[idx].update({"A": newA.upper(), "B": newB.upper(), "score": newS})
-                save_data(st.session_state.data); st.rerun()
-            if cb2.button("Smazat set", key=f"d_{idx}"):
-                st.session_state.data.pop(idx); save_data(st.session_state.data); st.rerun()
+            save_data(st.session_state.
