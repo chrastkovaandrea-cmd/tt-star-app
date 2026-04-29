@@ -88,6 +88,7 @@ with t1:
                 added_count = 0
                 skip_count = 0
 
+                # Cyklus pro zpracování všech setů
                 for i, s in enumerate(sets):
                     new_set = {
                         "A": p1_n, "B": p2_n, "score": s.strip(),
@@ -95,7 +96,6 @@ with t1:
                         "timestamp": ts, "odds": f"{o1}/{o2}"
                     }
                     
-                    # Kontrola duplicity před přidáním
                     is_dup = any(
                         d['A'] == new_set['A'] and 
                         d['B'] == new_set['B'] and 
@@ -110,17 +110,17 @@ with t1:
                     else:
                         skip_count += 1
 
+                # Uložení a refresh proběhne až po dokončení celého cyklu setů
                 if added_count > 0:
                     save_data(st.session_state.data)
                     st.success(f"Uloženo {added_count} setů!")
-                
-                if skip_count > 0:
-                    st.warning(f"Přeskočeno {skip_count} duplicitních setů.")
-                
-                if added_count > 0:
                     clear_input()
                     st.rerun()
-            except: st.error("Chyba formátu textu.")
+                elif skip_count > 0:
+                    st.warning(f"Všechny sety ({skip_count}) už v databázi jsou.")
+
+            except Exception as e: 
+                st.error(f"Chyba formátu textu: {e}")
 
 with t2:
     ratings = get_ratings()
