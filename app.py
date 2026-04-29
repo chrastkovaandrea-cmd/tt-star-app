@@ -84,15 +84,42 @@ with t1:
                 odds_raw = re.findall(r'\d+\.\d+', parts[-1])
                 o1, o2 = (odds_raw[0], odds_raw[1]) if len(odds_raw) >= 2 else ("0", "0")
                 ts = parts[2].strip() if len(parts) > 2 else datetime.datetime.now().strftime("%d.%m. %H:%M")
+                
+                added_count = 0
+                skip_count = 0
+
                 for i, s in enumerate(sets):
-                    st.session_state.data.append({
+                    new_set = {
                         "A": p1_n, "B": p2_n, "score": s.strip(),
                         "starter": ("A" if "Hráč 1" in m_first else "B") if (i+1)%2 != 0 else ("B" if "Hráč 1" in m_first else "A"),
                         "timestamp": ts, "odds": f"{o1}/{o2}"
-                    })
-                save_data(st.session_state.data)
-                clear_input()
-                st.success("Uloženo!"); st.rerun()
+                    }
+                    
+                    # Kontrola duplicity před přidáním
+                    is_dup = any(
+                        d['A'] == new_set['A'] and 
+                        d['B'] == new_set['B'] and 
+                        d['score'] == new_set['score'] and 
+                        d['timestamp'] == new_set['timestamp'] 
+                        for d in st.session_state.data
+                    )
+                    
+                    if not is_dup:
+                        st.session_state.data.append(new_set)
+                        added_count += 1
+                    else:
+                        skip_count += 1
+
+                if added_count > 0:
+                    save_data(st.session_state.data)
+                    st.success(f"Uloženo {added_count} setů!")
+                
+                if skip_count > 0:
+                    st.warning(f"Přeskočeno {skip_count} duplicitních setů.")
+                
+                if added_count > 0:
+                    clear_input()
+                    st.rerun()
             except: st.error("Chyba formátu textu.")
 
 with t2:
@@ -145,7 +172,6 @@ with t4:
             newB = c2.text_input("Hráč B", row['B'], key=f"b{idx}")
             newS = c3.text_input("Skóre", row['score'], key=f"s{idx}")
             
-            # TADY JE TO PODÁVÁNÍ PRO KAŽDÉHO HRÁČE
             new_starter = st.selectbox("Kdo v tomto setu podával?", [newA, newB], index=0 if row['starter'] == 'A' else 1, key=f"st{idx}")
             
             cb1, cb2 = st.columns(2)
