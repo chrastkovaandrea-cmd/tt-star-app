@@ -132,4 +132,30 @@ with t4:
     if up and st.button("✅ NAHRÁT DATA"):
         try:
             df_up = pd.read_csv(up); st.session_state.data = df_up.to_dict('records')
-            save_data(st.session_state.
+            save_data(st.session_state.data); st.success("Data byla nahrána!"); st.rerun()
+        except: st.error("Chyba při nahrávání.")
+    st.write("---")
+    st.subheader("🕒 Historie a úpravy")
+    for i, row in enumerate(st.session_state.data[::-1]):
+        idx = len(st.session_state.data) - 1 - i
+        starter_name = row['A'] if row['starter'] == 'A' else row['B']
+        with st.expander(f"{row['A']} - {row['B']} | {row['score']} | Podával: {starter_name}"):
+            c1, c2, c3 = st.columns(3)
+            newA = c1.text_input("Hráč A", row['A'], key=f"a{idx}")
+            newB = c2.text_input("Hráč B", row['B'], key=f"b{idx}")
+            newS = c3.text_input("Skóre", row['score'], key=f"s{idx}")
+            
+            # TADY JE TO PODÁVÁNÍ PRO KAŽDÉHO HRÁČE
+            new_starter = st.selectbox("Kdo v tomto setu podával?", [newA, newB], index=0 if row['starter'] == 'A' else 1, key=f"st{idx}")
+            
+            cb1, cb2 = st.columns(2)
+            if cb1.button("Uložit změny", key=f"sv{idx}"):
+                st.session_state.data[idx].update({
+                    "A": newA.upper(), 
+                    "B": newB.upper(), 
+                    "score": newS, 
+                    "starter": "A" if new_starter == newA else "B"
+                })
+                save_data(st.session_state.data); st.rerun()
+            if cb2.button("Smazat set", key=f"d_{idx}"):
+                st.session_state.data.pop(idx); save_data(st.session_state.data); st.rerun()
