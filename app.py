@@ -60,16 +60,17 @@ def get_ratings():
 t1, t2, t3, t4 = st.tabs(["📥 Vložit Zápas", "🔮 Predikce & Value", "🏆 Žebříček", "⚙️ Historie & Záloha"])
 
 with t1:
-    # Přidání klíče pro možnost resetování pole
-    if 'input_text' not in st.session_state:
-        st.session_state.input_text = ""
+    # Logika pro mazání textového pole
+    if "input_val" not in st.session_state:
+        st.session_state.input_val = ""
 
-    raw_in = st.text_area("Vlož text od Gemini:", value=st.session_state.input_text, height=100, key="main_input")
+    def clear_text():
+        st.session_state.input_val = ""
+
+    raw_in = st.text_area("Vlož text od Gemini:", key="input_val", height=100)
     
     col_v1, col_v2 = st.columns(2)
-    if col_v1.button("🗑️ Smazat text"):
-        st.session_state.input_text = ""
-        st.rerun()
+    col_v1.button("🗑️ Smazat text", on_click=clear_text)
 
     m_first = st.selectbox("Kdo podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
     
@@ -91,7 +92,7 @@ with t1:
                         "set_num": i+1, "timestamp": ts, "odds": f"{o1}/{o2}"
                     })
                 save_data(st.session_state.data)
-                st.session_state.input_text = "" # Po uložení taky vymazat
+                st.session_state.input_val = "" # Automatické smazání po úspěšném uložení
                 st.success("Uloženo!"); st.rerun()
             except: st.error("Chyba formátu.")
 
