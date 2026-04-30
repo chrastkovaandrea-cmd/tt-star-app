@@ -15,7 +15,7 @@ def normalize_name(name):
 def save_data(data):
     with open(DATA_FILE, "w") as f: 
         json.dump(data, f, indent=4)
-    st.cache_data.clear() # Vymaže mezipaměť, aby se po uložení vše hned přepočítalo
+    st.cache_data.clear()
 
 if 'data' not in st.session_state:
     if os.path.exists(DATA_FILE):
@@ -25,7 +25,7 @@ if 'data' not in st.session_state:
     else:
         st.session_state.data = []
 
-# --- CHYTŘEJŠÍ GLICKO-2 MATEMATIKA S CACHE ---
+# --- GLICKO-2 MATEMATIKA ---
 @st.cache_data(show_spinner="Aktualizuji ratingy...")
 def get_ratings(data_list):
     ratings = {}
@@ -46,7 +46,6 @@ def get_ratings(data_list):
         try:
             ptsA, ptsB = map(int, str(score).split(':'))
             margin = abs(ptsA - ptsB)
-            # Bodová marže ovlivňuje váhu růstu ratingu
             win_weight = 1.0 + (min(margin, 9) / 20.0) 
             actual_winA = 1 if ptsA > ptsB else 0
             
@@ -82,7 +81,6 @@ with t1:
     raw_in = st.text_area("Vlož text zápasu:", value=st.session_state.input_val, height=100, key="txt_area")
     c_del, _ = st.columns([1, 4])
     c_del.button("🗑️ Smazat text", on_click=clear_input)
-
     m_first = st.selectbox("Kdo podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
     
     if st.button("🚀 ULOŽIT ZÁPAS"):
@@ -97,25 +95,17 @@ with t1:
                 odds_raw = re.findall(r'\d+\.\d+', parts[-1])
                 o1, o2 = (odds_raw[0], odds_raw[1]) if len(odds_raw) >= 2 else ("0", "0")
                 ts = parts[2].strip() if len(parts) > 2 else datetime.datetime.now().strftime("%d.%m. %H:%M")
-                
-                temp_new_sets = []
-                skip_count = 0
-                # Super rychlá kontrola duplicit
                 existing_keys = {f"{d['A']}{d['B']}{d['score']}{d['timestamp']}" for d in st.session_state.data}
-
+                temp_new_sets = []
                 for i, s in enumerate(sets):
                     starter = ("A" if "Hráč 1" in m_first else "B") if (i + 1) % 2 != 0 else ("B" if "Hráč 1" in m_first else "A")
                     clean_score = s.strip().replace('-', ':')
-                    new_set = {"A": p1_n, "B": p2_n, "score": clean_score, "starter": starter, "timestamp": ts, "odds": f"{o1}/{o2}"}
                     if f"{p1_n}{p2_n}{clean_score}{ts}" not in existing_keys:
-                        temp_new_sets.append(new_set)
-                    else: skip_count += 1
-
+                        temp_new_sets.append({"A": p1_n, "B": p2_n, "score": clean_score, "starter": starter, "timestamp": ts, "odds": f"{o1}/{o2}"})
                 if temp_new_sets:
                     st.session_state.data.extend(temp_new_sets)
                     save_data(st.session_state.data)
                     st.success(f"Uloženo {len(temp_new_sets)} setů!")
-                    if skip_count > 0: st.info(f"Vynecháno {skip_count} duplicit.")
                     clear_input()
                     st.rerun()
             except Exception as e: st.error(f"Chyba: {e}")
@@ -123,30 +113,26 @@ with t1:
 with t2:
     ratings = get_ratings(st.session_state.data)
     if ratings:
-        c1, c2 = st.columns(2)
-        selA = c1.selectbox("Hráč A", sorted(list(ratings.keys())))
-        selB = c2.selectbox("Hráč B", sorted(list(ratings.keys())))
+        col_sel1, col_sel2 = st.columns(2)
+        selA = col_sel1.selectbox("Hráč A", sorted(list(ratings.keys())))
+        selB = col_sel2.selectbox("Hráč B", sorted(list(ratings.keys())))
         
-        colA, colB, colC = st.columns(3)
-        kWin = colA.number_input("Kurz na A", 1.01, 20.0, 1.85)
-        kOver = colB.number_input("Kurz Over 18.5", 1.01, 20.0, 1.85)
-        live_s = colC.radio("Právě podává:", [selA, selB])
+        col_o1, col_o2, col_o3 = st.columns(3)
+        kWinA = col_o1.number_input(f"Kurz na {selA}", 1.01, 20.0, 1.85)
+        kWinB = col_o2.number_input(f"Kurz na {selB}", 1.01, 20.0, 1.85)
+        live_s = col_o3.radio("Servis začíná:", [selA, selB])
         
         if selA != selB:
             rA, rB = ratings[selA], ratings[selB]
             q = math.log(10)/400
-            
-            # VYLEPŠENÍ: Zohlednění RD obou hráčů v predikci (pojistka nejistoty)
             rd_combined = math.sqrt(rA["rd"]**2 + rB["rd"]**2)
             g_comb = 1 / math.sqrt(1 + 3 * (q * rd_combined / math.pi)**2)
             
-            # Pravděpodobnost výhry jednoho setu
-            p_set = 1 / (1 + 10**(g_comb * (rA["r"] - rB["r"]) / -400))
+            # Pravděpodobnost jednoho setu
+            p_set_base = 1 / (1 + 10**(g_comb * (rA["r"] - rB["r"]) / -400))
+            p_set = min(max(p_set_base + (0.04 if live_s == selA else -0.04), 0.05), 0.95)
             
-            # Vliv podání
-            p_set = min(max(p_set + (0.05 if live_s == selA else -0.05), 0.01), 0.99)
-            
-            # Pravděpodobnosti přesných výsledků (Zápas na 3 vítězné)
+            # Pravděpodobnosti přesných výsledků zápasu (Best of 5)
             sc = {
                 "3:0": p_set**3,
                 "3:1": 3 * (p_set**3) * (1-p_set),
@@ -156,23 +142,45 @@ with t2:
                 "2:3": 6 * ((1-p_set)**3) * (p_set**2)
             }
             
-            probA_total = sc["3:0"] + sc["3:1"] + sc["3:2"]
-            st.metric(f"Celková šance na výhru {selA}", f"{round(probA_total*100,1)}%")
+            probA = sc["3:0"] + sc["3:1"] + sc["3:2"]
+            probB = 1 - probA
+            fairA, fairB = 1/probA, 1/probB
             
-            if (probA_total * kWin) > 1.05:
-                st.success(f"🔥 VALUE VÝHRA (EV: {round(probA_total*kWin,2)})")
+            # URČENÍ VÍTĚZE A VALUE
+            winner = selA if probA > probB else selB
+            win_pct = max(probA, probB) * 100
+            valA = "🟢" if kWinA > fairA else "❌"
+            valB = "🟢" if kWinB > fairB else "❌"
+            
+            st.markdown(f"### 🏆 Predikce: **{winner}** ({win_pct:.1f}%)")
+            
+            c1, c2 = st.columns(2)
+            c1.metric(f"Kurz {selA}", f"{kWinA}", f"Férový: {fairA:.2f} {valA}", delta_color="normal")
+            c2.metric(f"Kurz {selB}", f"{kWinB}", f"Férový: {fairB:.2f} {valB}", delta_color="normal")
             
             st.write("---")
-            st.subheader("🎯 Pravděpodobnost přesného výsledku")
-            r_cols = st.columns(6)
-            for i, (res, val) in enumerate(sc.items()):
-                r_cols[i].metric(res, f"{round(val*100,1)}%")
+            # LOGIKA SETŮ
+            best_res = max(sc, key=sc.get)
+            sets_count = int(best_res.split(':')[0]) + int(best_res.split(':')[1])
+            
+            st.subheader(f"📊 Odhadovaný výsledek: {best_res} ({sets_count} sety)")
+            
+            # Generování skóre setů podle dominance
+            s_cols = st.columns(sets_count)
+            for i in range(sets_count):
+                # Simulace skóre na základě pravděpodobnosti
+                if probA > 0.65: scores = ["11:7", "11:5", "11:8", "11:6", "11:9"]
+                elif probA < 0.35: scores = ["7:11", "5:11", "8:11", "6:11", "9:11"]
+                else: scores = ["11:9", "9:11", "12:10", "8:11", "11:8"]
+                
+                s_cols[i].markdown(f"**{i+1}. SET**")
+                s_cols[i].code(scores[i])
 
             st.write("---")
-            pOver = sc["3:1"] + sc["3:2"] + sc["1:3"] + sc["2:3"]
-            st.write(f"**Šance na Over 3.5 setu (18.5+ bodu):** {round(pOver*100,1)}%")
-            if (pOver * kOver) > 1.05:
-                st.info(f"📈 Výhodný Over (EV: {round(pOver*kOver,2)})")
+            st.subheader("🎯 Šance na přesný výsledek")
+            res_cols = st.columns(6)
+            for i, (res, val) in enumerate(sc.items()):
+                res_cols[i].metric(res, f"{val*100:.1f}%")
     else:
         st.warning("Nejdříve vlož nějaká data.")
 
