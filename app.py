@@ -114,13 +114,16 @@ with t2:
     ratings = get_ratings(st.session_state.data)
     if ratings:
         col_sel1, col_sel2 = st.columns(2)
-        selA = col_sel1.selectbox("Hráč A", sorted(list(ratings.keys())))
-        selB = col_sel2.selectbox("Hráč B", sorted(list(ratings.keys())))
+        # Seřazený seznam hráčů pro výběr
+        player_list = sorted(list(ratings.keys()))
+        selA = col_sel1.selectbox("Hráč A", player_list, key="pred_sel_A")
+        selB = col_sel2.selectbox("Hráč B", player_list, index=min(1, len(player_list)-1), key="pred_sel_B")
         
         col_o1, col_o2, col_o3 = st.columns(3)
-        kWinA = col_o1.number_input(f"Kurz na {selA}", 1.01, 20.0, 1.85)
-        kWinB = col_o2.number_input(f"Kurz na {selB}", 1.01, 20.0, 1.85)
-        live_s = col_o3.radio("Servis začíná:", [selA, selB])
+        # Přidány unikátní klíče (key), aby se předešlo chybě DuplicateElementId
+        kWinA = col_o1.number_input(f"Kurz na {selA}", 1.01, 20.0, 1.85, key="odds_input_A")
+        kWinB = col_o2.number_input(f"Kurz na {selB}", 1.01, 20.0, 1.85, key="odds_input_B")
+        live_s = col_o3.radio("Servis začíná:", [selA, selB], key="service_radio")
         
         if selA != selB:
             rA, rB = ratings[selA], ratings[selB]
@@ -128,11 +131,9 @@ with t2:
             rd_combined = math.sqrt(rA["rd"]**2 + rB["rd"]**2)
             g_comb = 1 / math.sqrt(1 + 3 * (q * rd_combined / math.pi)**2)
             
-            # Pravděpodobnost jednoho setu
             p_set_base = 1 / (1 + 10**(g_comb * (rA["r"] - rB["r"]) / -400))
             p_set = min(max(p_set_base + (0.04 if live_s == selA else -0.04), 0.05), 0.95)
             
-            # Pravděpodobnosti přesných výsledků zápasu (Best of 5)
             sc = {
                 "3:0": p_set**3,
                 "3:1": 3 * (p_set**3) * (1-p_set),
@@ -144,9 +145,8 @@ with t2:
             
             probA = sc["3:0"] + sc["3:1"] + sc["3:2"]
             probB = 1 - probA
-            fairA, fairB = 1/probA, 1/probB
+            fairA, fairB = 1/probA if probA > 0 else 100, 1/probB if probB > 0 else 100
             
-            # URČENÍ VÍTĚZE A VALUE
             winner = selA if probA > probB else selB
             win_pct = max(probA, probB) * 100
             valA = "🟢" if kWinA > fairA else "❌"
@@ -159,16 +159,13 @@ with t2:
             c2.metric(f"Kurz {selB}", f"{kWinB}", f"Férový: {fairB:.2f} {valB}", delta_color="normal")
             
             st.write("---")
-            # LOGIKA SETŮ
             best_res = max(sc, key=sc.get)
             sets_count = int(best_res.split(':')[0]) + int(best_res.split(':')[1])
             
             st.subheader(f"📊 Odhadovaný výsledek: {best_res} ({sets_count} sety)")
             
-            # Generování skóre setů podle dominance
             s_cols = st.columns(sets_count)
             for i in range(sets_count):
-                # Simulace skóre na základě pravděpodobnosti
                 if probA > 0.65: scores = ["11:7", "11:5", "11:8", "11:6", "11:9"]
                 elif probA < 0.35: scores = ["7:11", "5:11", "8:11", "6:11", "9:11"]
                 else: scores = ["11:9", "9:11", "12:10", "8:11", "11:8"]
@@ -181,6 +178,8 @@ with t2:
             res_cols = st.columns(6)
             for i, (res, val) in enumerate(sc.items()):
                 res_cols[i].metric(res, f"{val*100:.1f}%")
+        else:
+            st.error("Vyber dva rozdílné hráče!")
     else:
         st.warning("Nejdříve vlož nějaká data.")
 
