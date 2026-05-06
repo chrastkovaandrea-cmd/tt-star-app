@@ -1,6 +1,7 @@
 import streamlit as st
 import json, os, re, datetime, math, unicodedata
 import pandas as pd
+import io
 
 # --- KONFIGURACE ---
 DATA_FILE = "tt_star_ultra_v17.json"
@@ -199,36 +200,50 @@ with t4:
     
     with c_up:
         st.subheader("📥 Obnova / Nahrání")
-        up = st.file_uploader("Nahrát CSV (v6_cleaned)", type="csv")
+        up = st.file_uploader("Nahrát vyčištěné CSV", type="csv")
         if up and st.button("✅ POTVRDIT NAHRÁNÍ"):
             try:
-                # Načtení s automatickou detekcí oddělovače
-                df_up = pd.read_csv(up, sep=None, engine='python', encoding='utf-8-sig')
+                # Robustní načtení: zkusíme UTF-8 se signaturou i bez
+                raw_bytes = up.read()
+                try:
+                    text = raw_bytes.decode('utf-8-sig')
+                except:
+                    text = raw_bytes.decode('cp1250')
                 
-                # Kontrola potřebných sloupců
-                needed = {'A', 'B', 'score'}
-                if not needed.issubset(df_up.columns):
-                    st.error(f"Chyba: CSV musí mít sloupce {needed}. Má: {list(df_up.columns)}")
-                else:
-                    # Převod na list slovníků a ošetření prázdných hodnot
-                    new_data = df_up.where(pd.notnull(df_up), None).to_dict('records')
-                    st.session_state.data = new_data
-                    save_data(st.session_state.data)
-                    st.success("Data byla úspěšně přepsána!")
-                    st.rerun()
+                df_up = pd.read_csv(io.StringIO(text), sep=None, engine='python')
+                
+                # OPRAVA: Odstranění neviditelných znaků z názvů sloupců
+                df_up.columns = [col.encode('ascii', 'ignore').decode('ascii').strip() if isinstance(col, str) else col for col in df_up.columns]
+                
+                # Mapování sloupců pokud se jmenují jinak
+                rename_map = {'A': 'A', 'B': 'B', 'score': 'score'} # Přidat další pokud Gemini změní jména
+                df_up = df_up.rename(columns=rename_map)
+
+                if not {'A', 'B', 'score'}.issubset(df_up.columns):
+                    # Nouzový plán: pokud jména nesedí, zkusíme první 3 sloupce
+                    df_up.columns = ['A', 'B', 'score'] + list(df_up.columns[3:])
+                
+                # Vyčištění dat od NaN a mezer
+                df_up = df_up.where(pd.notnull(df_up), None)
+                new_data = df_up.to_dict('records')
+                
+                st.session_state.data = new_data
+                save_data(st.session_state.data)
+                st.success(f"Úspěšně nahráno {len(new_data)} řádků!")
+                st.rerun()
             except Exception as e:
-                st.error(f"Chyba při zpracování: {e}")
+                st.error(f"Chyba při nahrávání: {e}")
     
     st.write("---")
     st.subheader("🕒 Historie (posledních 50)")
     recent = st.session_state.data[::-1][:50]
     for i, row in enumerate(recent):
         idx = len(st.session_state.data) - 1 - i
-        with st.expander(f"{row['A']} vs {row['B']} | {row['score']} ({row['timestamp']})"):
+        with st.expander(f"{row.get('A', '???')} vs {row.get('B', '???')} | {row.get('score', '???')} ({row.get('timestamp', '???')})"):
             ca, cb, cc = st.columns(3)
-            nA = ca.text_input("Hráč A", row['A'], key=f"nA{idx}")
-            nB = cb.text_input("Hráč B", row['B'], key=f"nB{idx}")
-            nS = cc.text_input("Skóre", row['score'], key=f"nS{idx}")
+            nA = ca.text_input("Hráč A", row.get('A', ''), key=f"nA{idx}")
+            nB = cb.text_input("Hráč B", row.get('B', ''), key=f"nB{idx}")
+            nS = cc.text_input("Skóre", row.get('score', ''), key=f"nS{idx}")
             col_save, col_del = st.columns(2)
             if col_save.button("Uložit", key=f"s{idx}"):
                 st.session_state.data[idx].update({"A": nA.upper(), "B": nB.upper(), "score": nS})
