@@ -134,12 +134,8 @@ with t2:
             p_set = min(max(p_set_base + (0.04 if live_s == selA else -0.04), 0.05), 0.95)
             
             sc = {
-                "3:0": p_set**3,
-                "3:1": 3 * (p_set**3) * (1-p_set),
-                "3:2": 6 * (p_set**3) * ((1-p_set)**2),
-                "0:3": (1-p_set)**3,
-                "1:3": 3 * ((1-p_set)**3) * p_set,
-                "2:3": 6 * ((1-p_set)**3) * (p_set**2)
+                "3:0": p_set**3, "3:1": 3 * (p_set**3) * (1-p_set), "3:2": 6 * (p_set**3) * ((1-p_set)**2),
+                "0:3": (1-p_set)**3, "1:3": 3 * ((1-p_set)**3) * p_set, "2:3": 6 * ((1-p_set)**3) * (p_set**2)
             }
             
             probA = sc["3:0"] + sc["3:1"] + sc["3:2"]
@@ -160,96 +156,95 @@ with t2:
             st.write("---")
             best_res = max(sc, key=sc.get)
             sets_count = int(best_res.split(':')[0]) + int(best_res.split(':')[1])
-            
-            st.subheader(f"📊 Odhadovaný výsledek: {best_res} ({sets_count} sety)")
+            st.subheader(f"📊 Odhadovaný výsledek: {best_res}")
             
             s_cols = st.columns(sets_count)
             for i in range(sets_count):
-                if probA > 0.65: scores = ["11:7", "11:5", "11:8", "11:6", "11:9"]
-                elif probA < 0.35: scores = ["7:11", "5:11", "8:11", "6:11", "9:11"]
-                else: scores = ["11:9", "9:11", "12:10", "8:11", "11:8"]
-                
+                scores = ["11:7", "11:5", "11:8", "11:6", "11:9"] if probA > 0.5 else ["7:11", "5:11", "8:11", "6:11", "9:11"]
                 s_cols[i].markdown(f"**{i+1}. SET**")
-                s_cols[i].code(scores[i])
-
-            st.write("---")
-            st.subheader("🎯 Šance na přesný výsledek")
-            res_cols = st.columns(6)
-            for i, (res, val) in enumerate(sc.items()):
-                res_cols[i].metric(res, f"{val*100:.1f}%")
-        else:
-            st.error("Vyber dva rozdílné hráče!")
+                s_cols[i].code(scores[i % 5])
     else:
-        st.warning("Nejdříve vlož nějaká data.")
+        st.warning("Nejdříve vlož data.")
 
 with t3:
     ratings = get_ratings(st.session_state.data)
     if ratings:
-        search = st.text_input("🔍 Hledat hráče")
+        search = st.text_input("🔍 Hledat hráče").upper()
         df_view = pd.DataFrame([{"Hráč": k, "Rating": int(v["r"]), "RD": int(v["rd"]), "Z": v["count"]} for k, v in ratings.items()])
-        if search: df_view = df_view[df_view['Hráč'].str.contains(search.upper())]
+        if search: df_view = df_view[df_view['Hráč'].str.contains(search)]
         st.dataframe(df_view.sort_values("Rating", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
-    c_up, c_down = st.columns(2)
-    with c_down:
-        st.subheader("📤 Záloha")
-        if st.session_state.data:
-            csv = pd.DataFrame(st.session_state.data).to_csv(index=False).encode('utf-8-sig')
-            st.download_button("STÁHNOUT CSV", data=csv, file_name="tt_star_backup.csv")
+    st.subheader("⚙️ Správa a Import")
     
-    with c_up:
-        st.subheader("📥 Obnova / Nahrání")
-        up = st.file_uploader("Nahrát vyčištěné CSV", type="csv")
-        if up and st.button("✅ POTVRDIT NAHRÁNÍ"):
-            try:
-                # Robustní načtení: zkusíme UTF-8 se signaturou i bez
-                raw_bytes = up.read()
+    # NOVÁ SEKCE: VLOŽENÍ TEXTU (Tady vyřešíme tvůj problém!)
+    with st.expander("📝 RYCHLÝ IMPORT TEXTEM (Pokud nefunguje soubor)", expanded=True):
+        st.info("Otevři vyčištěné CSV v mobilu, zkopíruj text a vlož ho sem.")
+        input_csv_text = st.text_area("Sem vlož obsah CSV:")
+        if st.button("📥 IMPORTOVAT VLOŽENÝ TEXT"):
+            if input_csv_text:
                 try:
-                    text = raw_bytes.decode('utf-8-sig')
-                except:
-                    text = raw_bytes.decode('cp1250')
-                
-                df_up = pd.read_csv(io.StringIO(text), sep=None, engine='python')
-                
-                # OPRAVA: Odstranění neviditelných znaků z názvů sloupců
-                df_up.columns = [col.encode('ascii', 'ignore').decode('ascii').strip() if isinstance(col, str) else col for col in df_up.columns]
-                
-                # Mapování sloupců pokud se jmenují jinak
-                rename_map = {'A': 'A', 'B': 'B', 'score': 'score'} # Přidat další pokud Gemini změní jména
-                df_up = df_up.rename(columns=rename_map)
+                    df_raw = pd.read_csv(io.StringIO(input_csv_text), sep=None, engine='python')
+                    # Vyčištění neviditelných znaků z názvů sloupců
+                    df_raw.columns = [re.sub(r'[^a-zA-Z0-9]', '', str(col)).strip() for col in df_raw.columns]
+                    
+                    # Pokus o mapování sloupců i když jsou divně pojmenované
+                    if len(df_raw.columns) >= 3:
+                        cols = list(df_raw.columns)
+                        df_raw = df_raw.rename(columns={cols[0]: 'A', cols[1]: 'B', cols[2]: 'score'})
+                    
+                    new_data = df_raw.where(pd.notnull(df_raw), None).to_dict('records')
+                    st.session_state.data = new_data
+                    save_data(st.session_state.data)
+                    st.success(f"Nahráno {len(new_data)} řádků!")
+                    st.rerun()
+                except Exception as e: st.error(f"Chyba: {e}")
 
-                if not {'A', 'B', 'score'}.issubset(df_up.columns):
-                    # Nouzový plán: pokud jména nesedí, zkusíme první 3 sloupce
+    st.write("---")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("📥 Nahrát soubor")
+        up = st.file_uploader("Vyber CSV soubor", type="csv")
+        if up and st.button("✅ POTVRDIT SOUBOR"):
+            try:
+                # Načtení s detekcí kódování
+                bytes_data = up.read()
+                try: text_data = bytes_data.decode('utf-8-sig')
+                except: text_data = bytes_data.decode('cp1250')
+                
+                df_up = pd.read_csv(io.StringIO(text_data), sep=None, engine='python')
+                df_up.columns = [re.sub(r'[^a-zA-Z0-9]', '', str(col)).strip() for col in df_up.columns]
+                if len(df_up.columns) >= 3:
                     df_up.columns = ['A', 'B', 'score'] + list(df_up.columns[3:])
                 
-                # Vyčištění dat od NaN a mezer
-                df_up = df_up.where(pd.notnull(df_up), None)
-                new_data = df_up.to_dict('records')
-                
-                st.session_state.data = new_data
+                st.session_state.data = df_up.where(pd.notnull(df_up), None).to_dict('records')
                 save_data(st.session_state.data)
-                st.success(f"Úspěšně nahráno {len(new_data)} řádků!")
+                st.success("Soubor nahrán!")
                 st.rerun()
-            except Exception as e:
-                st.error(f"Chyba při nahrávání: {e}")
-    
+            except Exception as e: st.error(f"Chyba: {e}")
+            
+    with col2:
+        st.subheader("📤 Záloha")
+        if st.session_state.data:
+            csv_out = pd.DataFrame(st.session_state.data).to_csv(index=False).encode('utf-8-sig')
+            st.download_button("STÁHNOUT MOJE DATA", data=csv_out, file_name="tt_star_backup.csv")
+
     st.write("---")
     st.subheader("🕒 Historie (posledních 50)")
     recent = st.session_state.data[::-1][:50]
     for i, row in enumerate(recent):
         idx = len(st.session_state.data) - 1 - i
-        with st.expander(f"{row.get('A', '???')} vs {row.get('B', '???')} | {row.get('score', '???')} ({row.get('timestamp', '???')})"):
+        with st.expander(f"{row.get('A','?')} vs {row.get('B','?')} | {row.get('score','?')} ({row.get('timestamp','?')})"):
             ca, cb, cc = st.columns(3)
-            nA = ca.text_input("Hráč A", row.get('A', ''), key=f"nA{idx}")
-            nB = cb.text_input("Hráč B", row.get('B', ''), key=f"nB{idx}")
-            nS = cc.text_input("Skóre", row.get('score', ''), key=f"nS{idx}")
-            col_save, col_del = st.columns(2)
-            if col_save.button("Uložit", key=f"s{idx}"):
+            nA = ca.text_input("Hráč A", row.get('A',''), key=f"nA{idx}")
+            nB = cb.text_input("Hráč B", row.get('B',''), key=f"nB{idx}")
+            nS = cc.text_input("Skóre", row.get('score',''), key=f"nS{idx}")
+            if st.button("Uložit změny", key=f"s{idx}"):
                 st.session_state.data[idx].update({"A": nA.upper(), "B": nB.upper(), "score": nS})
                 save_data(st.session_state.data)
                 st.rerun()
-            if col_del.button("Smazat", key=f"d{idx}"):
+            if st.button("Smazat zápas", key=f"d{idx}"):
                 st.session_state.data.pop(idx)
                 save_data(st.session_state.data)
                 st.rerun()
