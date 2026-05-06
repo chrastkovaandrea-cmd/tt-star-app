@@ -36,7 +36,7 @@ def get_ratings(data_list):
     q = math.log(10) / 400
     
     for d in sorted_data:
-        pA, pB, score = d['A'], d['B'], d['score']
+        pA, pB, score = d.get('A'), d.get('B'), d.get('score')
         if not pA or not pB or ":" not in str(score): continue
         
         for p in [pA, pB]:
@@ -113,14 +113,12 @@ with t1:
 with t2:
     ratings = get_ratings(st.session_state.data)
     if ratings:
-        col_sel1, col_sel2 = st.columns(2)
-        # Seřazený seznam hráčů pro výběr
         player_list = sorted(list(ratings.keys()))
+        col_sel1, col_sel2 = st.columns(2)
         selA = col_sel1.selectbox("Hráč A", player_list, key="pred_sel_A")
         selB = col_sel2.selectbox("Hráč B", player_list, index=min(1, len(player_list)-1), key="pred_sel_B")
         
         col_o1, col_o2, col_o3 = st.columns(3)
-        # Přidány unikátní klíče (key), aby se předešlo chybě DuplicateElementId
         kWinA = col_o1.number_input(f"Kurz na {selA}", 1.01, 20.0, 1.85, key="odds_input_A")
         kWinB = col_o2.number_input(f"Kurz na {selB}", 1.01, 20.0, 1.85, key="odds_input_B")
         live_s = col_o3.radio("Servis začíná:", [selA, selB], key="service_radio")
@@ -187,9 +185,9 @@ with t3:
     ratings = get_ratings(st.session_state.data)
     if ratings:
         search = st.text_input("🔍 Hledat hráče")
-        df = pd.DataFrame([{"Hráč": k, "Rating": int(v["r"]), "RD": int(v["rd"]), "Z": v["count"]} for k, v in ratings.items()])
-        if search: df = df[df['Hráč'].str.contains(search.upper())]
-        st.dataframe(df.sort_values("Rating", ascending=False), use_container_width=True, hide_index=True)
+        df_view = pd.DataFrame([{"Hráč": k, "Rating": int(v["r"]), "RD": int(v["rd"]), "Z": v["count"]} for k, v in ratings.items()])
+        if search: df_view = df_view[df_view['Hráč'].str.contains(search.upper())]
+        st.dataframe(df_view.sort_values("Rating", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
     c_up, c_down = st.columns(2)
@@ -198,14 +196,28 @@ with t4:
         if st.session_state.data:
             csv = pd.DataFrame(st.session_state.data).to_csv(index=False).encode('utf-8-sig')
             st.download_button("STÁHNOUT CSV", data=csv, file_name="tt_star_backup.csv")
+    
     with c_up:
-        st.subheader("📥 Obnova")
-        up = st.file_uploader("Nahrát CSV", type="csv")
+        st.subheader("📥 Obnova / Nahrání")
+        up = st.file_uploader("Nahrát CSV (v6_cleaned)", type="csv")
         if up and st.button("✅ POTVRDIT NAHRÁNÍ"):
-            df_up = pd.read_csv(up)
-            st.session_state.data = df_up.to_dict('records')
-            save_data(st.session_state.data)
-            st.rerun()
+            try:
+                # Načtení s automatickou detekcí oddělovače
+                df_up = pd.read_csv(up, sep=None, engine='python', encoding='utf-8-sig')
+                
+                # Kontrola potřebných sloupců
+                needed = {'A', 'B', 'score'}
+                if not needed.issubset(df_up.columns):
+                    st.error(f"Chyba: CSV musí mít sloupce {needed}. Má: {list(df_up.columns)}")
+                else:
+                    # Převod na list slovníků a ošetření prázdných hodnot
+                    new_data = df_up.where(pd.notnull(df_up), None).to_dict('records')
+                    st.session_state.data = new_data
+                    save_data(st.session_state.data)
+                    st.success("Data byla úspěšně přepsána!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Chyba při zpracování: {e}")
     
     st.write("---")
     st.subheader("🕒 Historie (posledních 50)")
@@ -217,11 +229,12 @@ with t4:
             nA = ca.text_input("Hráč A", row['A'], key=f"nA{idx}")
             nB = cb.text_input("Hráč B", row['B'], key=f"nB{idx}")
             nS = cc.text_input("Skóre", row['score'], key=f"nS{idx}")
-            if st.button("Uložit", key=f"s{idx}"):
+            col_save, col_del = st.columns(2)
+            if col_save.button("Uložit", key=f"s{idx}"):
                 st.session_state.data[idx].update({"A": nA.upper(), "B": nB.upper(), "score": nS})
                 save_data(st.session_state.data)
                 st.rerun()
-            if st.button("Smazat", key=f"d{idx}"):
+            if col_del.button("Smazat", key=f"d{idx}"):
                 st.session_state.data.pop(idx)
                 save_data(st.session_state.data)
                 st.rerun()
