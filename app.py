@@ -114,7 +114,7 @@ with t2:
         co1, co2, co3 = st.columns(3)
         kWinA = co1.number_input(f"Kurz {selA}", 1.01, 20.0, 1.85)
         kWinB = co2.number_input(f"Kurz {selB}", 1.01, 20.0, 1.85)
-        live_s = co3.radio("Servis:", [selA, selB])
+        live_s = co3.radio("Kdo začíná podávat (Live):", [selA, selB])
         
         if selA != selB:
             rA, rB = ratings[selA], ratings[selB]
@@ -122,6 +122,8 @@ with t2:
             rd_c = math.sqrt(rA["rd"]**2 + rB["rd"]**2)
             g = 1 / math.sqrt(1 + 3 * (q * rd_c / math.pi)**2)
             p_base = 1 / (1 + 10**(g * (rA["r"] - rB["r"]) / -400))
+            
+            # Bonus pro podávajícího
             p_set = min(max(p_base + (0.05 if live_s == selA else -0.05), 0.05), 0.95)
             
             # Pravděpodobnosti přesných výsledků
@@ -136,15 +138,14 @@ with t2:
             st.markdown(f"## 🏆 Vítěz: **{selA if probA > probB else selB}** ({max(probA, probB)*100:.1f}%)")
             st.subheader(f"📊 Nejpravděpodobnější výsledek: {best_res}")
             
-            # Predikce bodů v setech
             st.write("---")
             st.markdown("### 📈 Odhad skóre v jednotlivých setech")
             s_cols = st.columns(5)
             for i in range(5):
-                # Generování logických bodů (simulace)
-                if p_set > 0.55: pts = [("11:7"), ("11:5"), ("11:9"), ("12:10"), ("11:6")][i]
-                elif p_set < 0.45: pts = [("7:11"), ("5:11"), ("9:11"), ("10:12"), ("6:11")][i]
-                else: pts = [("11:9"), ("9:11"), ("11:8"), ("8:11"), ("11:9")][i]
+                if p_set > 0.60: pts = ["11:7", "11:5", "11:8", "11:6", "11:9"][i]
+                elif p_set > 0.50: pts = ["11:9", "11:8", "11:7", "12:10", "11:9"][i]
+                elif p_set > 0.40: pts = ["9:11", "11:9", "8:11", "11:8", "9:11"][i]
+                else: pts = ["7:11", "5:11", "8:11", "6:11", "9:11"][i]
                 
                 with s_cols[i]:
                     st.write(f"**{i+1}. SET**")
@@ -155,16 +156,55 @@ with t2:
 with t3:
     ratings = get_ratings(st.session_state.data)
     if ratings:
-        df_view = pd.DataFrame([{"Hráč": k, "Rating": int(v["r"]), "Z": v["count"]} for k, v in ratings.items()])
+        df_view = pd.DataFrame([{"Hráč": k, "Rating": int(v["r"]), "Zápasů": v["count"]} for k, v in ratings.items()])
         st.dataframe(df_view.sort_values("Rating", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
     st.subheader("⚙️ Správa, Import a Export")
     c_i, c_e = st.columns(2)
+    
     with c_i:
         st.markdown("### 📥 Import")
-        up = st.file_uploader("Nahrát CSV", type=None)
-        if up and st.button("✅ POTVRDIT"):
+        up = st.file_uploader("Nahrát soubor (CSV)", type=None)
+        if up and st.button("✅ POTVRDIT IMPORT"):
             try:
-                b = up.read()
-                try: t
+                bytes_data = up.read()
+                try:
+                    text_data = bytes_data.decode('utf-8-sig')
+                except:
+                    text_data = bytes_data.decode('cp1250')
+                
+                df = pd.read_csv(io.StringIO(text_data), sep=None, engine='python')
+                df.columns = [str(c).strip() for c in df.columns]
+                
+                if 'A' not in df.columns:
+                    df = df.rename(columns={df.columns[0]:'A', df.columns[1]:'B', df.columns[2]:'score'})
+                
+                df['A'] = df['A'].apply(normalize_name)
+                df['B'] = df['B'].apply(normalize_name)
+                
+                st.session_state.data = df.where(pd.notnull(df), None).to_dict('records')
+                save_data(st.session_state.data)
+                st.success("Data byla úspěšně nahrána!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Chyba při importu: {e}")
+
+    with c_e:
+        st.markdown("### 📤 Export")
+        if st.session_state.data:
+            df_ex = pd.DataFrame(st.session_state.data)
+            csv_b = io.StringIO()
+            df_ex.to_csv(csv_b, index=False, encoding='utf-8-sig')
+            st.download_button(
+                "💾 STÁHNOUT ZÁLOHU (CSV)", 
+                data=csv_b.getvalue(), 
+                file_name=f"tt_star_backup_{datetime.datetime.now().strftime('%d_%m')}.csv", 
+                use_container_width=True
+            )
+
+    st.write("---")
+    if st.button("🧨 SMAZAT VŠECHNA DATA", use_container_width=True):
+        st.session_state.data = []
+        save_data([])
+        st.rerun()
