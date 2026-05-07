@@ -75,71 +75,93 @@ def get_ratings(data_list):
 t1, t2, t3, t4 = st.tabs(["📥 Vkládání", "🔮 Predikce", "🏆 Žebříček", "⚙️ Správa"])
 
 with t1:
-    st.info("Ruční vkládání zápasu")
-    raw_in = st.text_area("Text zápasu:", height=100, key="txt_area")
-    m_first = st.selectbox("Podání v 1. setu:", ["Hráč 1", "Hráč 2"])
-    if st.button("🚀 ULOŽIT"):
-        # ... (zde zůstává tvoje původní logika vkládání)
-        pass
+    st.subheader("Ruční vkládání zápasu")
+    raw_in = st.text_area("Vlož text zápasu (formát z webu):", height=100, key="txt_area")
+    m_first = st.selectbox("Kdo podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
+    
+    if st.button("🚀 ULOŽIT ZÁPAS"):
+        if raw_in:
+            try:
+                parts = raw_in.split('|')
+                names = parts[0].split('-')
+                p1_n, p2_n = normalize_name(names[0]), normalize_name(names[1])
+                sets_raw = re.search(r'\((.*?)\)', parts[1]).group(1)
+                sets = [s.strip() for s in sets_raw.split(',')]
+                odds_raw = re.findall(r'\d+\.\d+', parts[-1])
+                o1, o2 = (odds_raw[0], odds_raw[1]) if len(odds_raw) >= 2 else ("0", "0")
+                ts = parts[2].strip() if len(parts) > 2 else datetime.datetime.now().strftime("%d.%m. %H:%M")
+                
+                temp_new_sets = []
+                for i, s in enumerate(sets):
+                    starter = ("A" if "Hráč 1" in m_first else "B") if (i + 1) % 2 != 0 else ("B" if "Hráč 1" in m_first else "A")
+                    clean_score = s.strip().replace('-', ':')
+                    temp_new_sets.append({"A": p1_n, "B": p2_n, "score": clean_score, "starter": starter, "timestamp": ts, "odds": f"{o1}/{o2}"})
+                
+                st.session_state.data.extend(temp_new_sets)
+                save_data(st.session_state.data)
+                st.success(f"Uloženo {len(temp_new_sets)} setů!")
+                st.rerun()
+            except Exception as e: st.error(f"Chyba: {e}")
 
 with t3:
     ratings = get_ratings(st.session_state.data)
     if ratings:
-        df_view = pd.DataFrame([{"Hráč": k, "Rating": int(v["r"]), "Zápasů": v["count"]} for k, v in ratings.items()])
-        st.dataframe(df_view.sort_values("Rating", ascending=False), use_container_width=True)
+        df_view = pd.DataFrame([{"Hráč": k, "Rating": int(v["r"]), "Z": v["count"]} for k, v in ratings.items()])
+        st.dataframe(df_view.sort_values("Rating", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
-    st.subheader("⚙️ Import a Oprava dat")
+    st.subheader("⚙️ Správa, Import a Export")
     
-    # TADY JE TA ZMĚNA: type=None povolí i "tmavé" soubory
-    up = st.file_uploader("Vyberte soubor (i ten upravený/merged)", type=None)
+    col_imp, col_exp = st.columns(2)
     
-    if up is not None:
-        if st.button("✅ NAHRÁT A OPRAVIT SOUBOR"):
-            try:
-                bytes_data = up.read()
-                # Zkusíme různé dekódování
-                try: text_data = bytes_data.decode('utf-8-sig')
-                except: text_data = bytes_data.decode('cp1250')
-                
-                # Načtení - sep=None zkusí čárku i středník
-                df = pd.read_csv(io.StringIO(text_data), sep=None, engine='python')
-                
-                # --- INTELIGENTNÍ OPRAVA SLOUPCŮ ---
-                # Přejmenujeme sloupce, pokud jsou tam ty z merged verze
-                df.columns = [str(c).strip() for c in df.columns]
-                
-                mapping = {}
-                # Najdeme sloupec pro Hráče A
-                for c in df.columns:
-                    if c.lower() in ['a', 'player_a', 'hrac1', 'hrac_a']: mapping[c] = 'A'
-                    if c.lower() in ['b', 'player_b', 'hrac2', 'hrac_b']: mapping[c] = 'B'
-                    if c.lower() in ['score', 'vysledek', 'skore']: mapping[c] = 'score'
-                
-                if mapping:
-                    df = df.rename(columns=mapping)
-                
-                # Pokud po mapování nemáme A, B, score, vezmeme prostě první 3 sloupce
-                if 'A' not in df.columns or 'B' not in df.columns:
-                    df = df.rename(columns={df.columns[0]: 'A', df.columns[1]: 'B', df.columns[2]: 'score'})
+    with col_imp:
+        st.markdown("### 📥 Import")
+        up = st.file_uploader("Vyberte soubor pro nahrání", type=None)
+        if up is not None:
+            if st.button("✅ POTVRDIT IMPORT"):
+                try:
+                    bytes_data = up.read()
+                    try: text_data = bytes_data.decode('utf-8-sig')
+                    except: text_data = bytes_data.decode('cp1250')
+                    
+                    df = pd.read_csv(io.StringIO(text_data), sep=None, engine='python')
+                    df.columns = [str(c).strip() for c in df.columns]
+                    
+                    # Mapování sloupců
+                    if 'A' not in df.columns or 'B' not in df.columns:
+                        df = df.rename(columns={df.columns[0]: 'A', df.columns[1]: 'B', df.columns[2]: 'score'})
+                    
+                    df['A'] = df['A'].apply(normalize_name)
+                    df['B'] = df['B'].apply(normalize_name)
+                    
+                    new_rows = df.where(pd.notnull(df), None).to_dict('records')
+                    st.session_state.data = new_rows
+                    save_data(new_rows)
+                    st.success(f"Nahráno {len(new_rows)} řádků.")
+                    st.rerun()
+                except Exception as e: st.error(f"Chyba: {e}")
 
-                # Vyčištění dat
-                df['A'] = df['A'].apply(normalize_name)
-                df['B'] = df['B'].apply(normalize_name)
-                
-                # Převedení na JSON formát pro model
-                new_data = df.where(pd.notnull(df), None).to_dict('records')
-                st.session_state.data = new_data
-                save_data(new_data)
-                
-                st.success(f"Hotovo! Nahráno a opraveno {len(new_data)} řádků.")
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Chyba při zpracování: {e}")
+    with col_exp:
+        st.markdown("### 📤 Export")
+        if st.session_state.data:
+            # Převedeme aktuální data v paměti na CSV
+            df_export = pd.DataFrame(st.session_state.data)
+            csv_buffer = io.StringIO()
+            df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            
+            st.write(f"Aktuální počet řádků: **{len(st.session_state.data)}**")
+            st.download_button(
+                label="💾 STÁHNOUT AKTUÁLNÍ DATA (CSV)",
+                data=csv_buffer.getvalue(),
+                file_name=f"tt_star_backup_{datetime.datetime.now().strftime('%d_%m_%H_%M')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.warning("Žádná data k exportu.")
 
     st.write("---")
-    if st.button("🧨 SMAZAT VŠE"):
+    if st.button("🧨 SMAZAT VŠECHNA DATA", use_container_width=True):
         st.session_state.data = []
         save_data([])
         st.rerun()
