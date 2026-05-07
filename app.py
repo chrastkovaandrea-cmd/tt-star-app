@@ -177,22 +177,26 @@ with t3:
 with t4:
     st.subheader("⚙️ Správa a Import")
     
-    # NOVÁ SEKCE: VLOŽENÍ TEXTU (Tady vyřešíme tvůj problém!)
-    with st.expander("📝 RYCHLÝ IMPORT TEXTEM (Pokud nefunguje soubor)", expanded=True):
-        st.info("Otevři vyčištěné CSV v mobilu, zkopíruj text a vlož ho sem.")
+    # --- SEKCE SMAZÁNÍ VŠEHO ---
+    st.error("⚠️ NEBEZPEČNÁ ZÓNA")
+    if st.button("🧨 SMAZAT ÚPLNĚ VŠECHNA DATA", use_container_width=True):
+        st.session_state.data = []
+        save_data([])
+        st.success("Všechna data byla smazána!")
+        st.rerun()
+    st.write("---")
+
+    with st.expander("📝 RYCHLÝ IMPORT TEXTEM", expanded=True):
+        st.info("Vlož text z CSV a klikni na import.")
         input_csv_text = st.text_area("Sem vlož obsah CSV:")
         if st.button("📥 IMPORTOVAT VLOŽENÝ TEXT"):
             if input_csv_text:
                 try:
                     df_raw = pd.read_csv(io.StringIO(input_csv_text), sep=None, engine='python')
-                    # Vyčištění neviditelných znaků z názvů sloupců
                     df_raw.columns = [re.sub(r'[^a-zA-Z0-9]', '', str(col)).strip() for col in df_raw.columns]
-                    
-                    # Pokus o mapování sloupců i když jsou divně pojmenované
                     if len(df_raw.columns) >= 3:
                         cols = list(df_raw.columns)
                         df_raw = df_raw.rename(columns={cols[0]: 'A', cols[1]: 'B', cols[2]: 'score'})
-                    
                     new_data = df_raw.where(pd.notnull(df_raw), None).to_dict('records')
                     st.session_state.data = new_data
                     save_data(st.session_state.data)
@@ -208,16 +212,13 @@ with t4:
         up = st.file_uploader("Vyber CSV soubor", type="csv")
         if up and st.button("✅ POTVRDIT SOUBOR"):
             try:
-                # Načtení s detekcí kódování
                 bytes_data = up.read()
                 try: text_data = bytes_data.decode('utf-8-sig')
                 except: text_data = bytes_data.decode('cp1250')
-                
                 df_up = pd.read_csv(io.StringIO(text_data), sep=None, engine='python')
                 df_up.columns = [re.sub(r'[^a-zA-Z0-9]', '', str(col)).strip() for col in df_up.columns]
                 if len(df_up.columns) >= 3:
                     df_up.columns = ['A', 'B', 'score'] + list(df_up.columns[3:])
-                
                 st.session_state.data = df_up.where(pd.notnull(df_up), None).to_dict('records')
                 save_data(st.session_state.data)
                 st.success("Soubor nahrán!")
