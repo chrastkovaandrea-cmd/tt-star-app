@@ -27,7 +27,7 @@ if 'data' not in st.session_state:
     else:
         st.session_state.data = []
 
-# --- GLICKO-2 VÝPOČET ---
+# --- GLICKO-2 MATEMATIKA ---
 @st.cache_data(show_spinner="Přepočítávám žebříček...")
 def get_ratings(data_list):
     ratings = {}
@@ -76,7 +76,7 @@ t1, t2, t3, t4 = st.tabs(["📥 Vkládání", "🔮 Predikce", "🏆 Žebříče
 
 with t1:
     st.subheader("Ruční vkládání zápasu")
-    raw_in = st.text_area("Vlož text zápasu (formát z webu):", height=100, key="txt_area")
+    raw_in = st.text_area("Vlož text zápasu:", height=100, key="txt_area")
     m_first = st.selectbox("Kdo podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
     
     if st.button("🚀 ULOŽIT ZÁPAS"):
@@ -93,15 +93,64 @@ with t1:
                 
                 temp_new_sets = []
                 for i, s in enumerate(sets):
-                    starter = ("A" if "Hráč 1" in m_first else "B") if (i + 1) % 2 != 0 else ("B" if "Hráč 1" in m_first else "A")
+                    starter = ("A" if "Hráč 1" in m_first else "B") if (i+1)%2!=0 else ("B" if "Hráč 1" in m_first else "A")
                     clean_score = s.strip().replace('-', ':')
                     temp_new_sets.append({"A": p1_n, "B": p2_n, "score": clean_score, "starter": starter, "timestamp": ts, "odds": f"{o1}/{o2}"})
                 
                 st.session_state.data.extend(temp_new_sets)
                 save_data(st.session_state.data)
-                st.success(f"Uloženo {len(temp_new_sets)} setů!")
+                st.success("Uloženo!")
                 st.rerun()
             except Exception as e: st.error(f"Chyba: {e}")
+
+with t2:
+    ratings = get_ratings(st.session_state.data)
+    if ratings:
+        player_list = sorted(list(ratings.keys()))
+        c1, c2 = st.columns(2)
+        selA = c1.selectbox("Hráč A", player_list, key="sA")
+        selB = c2.selectbox("Hráč B", player_list, index=min(1, len(player_list)-1), key="sB")
+        
+        co1, co2, co3 = st.columns(3)
+        kWinA = co1.number_input(f"Kurz {selA}", 1.01, 20.0, 1.85)
+        kWinB = co2.number_input(f"Kurz {selB}", 1.01, 20.0, 1.85)
+        live_s = co3.radio("Servis:", [selA, selB])
+        
+        if selA != selB:
+            rA, rB = ratings[selA], ratings[selB]
+            q = math.log(10)/400
+            rd_c = math.sqrt(rA["rd"]**2 + rB["rd"]**2)
+            g = 1 / math.sqrt(1 + 3 * (q * rd_c / math.pi)**2)
+            p_base = 1 / (1 + 10**(g * (rA["r"] - rB["r"]) / -400))
+            p_set = min(max(p_base + (0.05 if live_s == selA else -0.05), 0.05), 0.95)
+            
+            # Pravděpodobnosti přesných výsledků
+            sc = {
+                "3:0": p_set**3, "3:1": 3 * (p_set**3) * (1-p_set), "3:2": 6 * (p_set**3) * ((1-p_set)**2),
+                "0:3": (1-p_set)**3, "1:3": 3 * ((1-p_set)**3) * p_set, "2:3": 6 * ((1-p_set)**3) * (p_set**2)
+            }
+            probA = sc["3:0"] + sc["3:1"] + sc["3:2"]
+            probB = 1 - probA
+            
+            best_res = max(sc, key=sc.get)
+            st.markdown(f"## 🏆 Vítěz: **{selA if probA > probB else selB}** ({max(probA, probB)*100:.1f}%)")
+            st.subheader(f"📊 Nejpravděpodobnější výsledek: {best_res}")
+            
+            # Predikce bodů v setech
+            st.write("---")
+            st.markdown("### 📈 Odhad skóre v jednotlivých setech")
+            s_cols = st.columns(5)
+            for i in range(5):
+                # Generování logických bodů (simulace)
+                if p_set > 0.55: pts = [("11:7"), ("11:5"), ("11:9"), ("12:10"), ("11:6")][i]
+                elif p_set < 0.45: pts = [("7:11"), ("5:11"), ("9:11"), ("10:12"), ("6:11")][i]
+                else: pts = [("11:9"), ("9:11"), ("11:8"), ("8:11"), ("11:9")][i]
+                
+                with s_cols[i]:
+                    st.write(f"**{i+1}. SET**")
+                    st.code(pts)
+            
+            st.info(f"Férové kurzy -> {selA}: {1/probA:.2f} | {selB}: {1/probB:.2f}")
 
 with t3:
     ratings = get_ratings(st.session_state.data)
@@ -111,57 +160,11 @@ with t3:
 
 with t4:
     st.subheader("⚙️ Správa, Import a Export")
-    
-    col_imp, col_exp = st.columns(2)
-    
-    with col_imp:
+    c_i, c_e = st.columns(2)
+    with c_i:
         st.markdown("### 📥 Import")
-        up = st.file_uploader("Vyberte soubor pro nahrání", type=None)
-        if up is not None:
-            if st.button("✅ POTVRDIT IMPORT"):
-                try:
-                    bytes_data = up.read()
-                    try: text_data = bytes_data.decode('utf-8-sig')
-                    except: text_data = bytes_data.decode('cp1250')
-                    
-                    df = pd.read_csv(io.StringIO(text_data), sep=None, engine='python')
-                    df.columns = [str(c).strip() for c in df.columns]
-                    
-                    # Mapování sloupců
-                    if 'A' not in df.columns or 'B' not in df.columns:
-                        df = df.rename(columns={df.columns[0]: 'A', df.columns[1]: 'B', df.columns[2]: 'score'})
-                    
-                    df['A'] = df['A'].apply(normalize_name)
-                    df['B'] = df['B'].apply(normalize_name)
-                    
-                    new_rows = df.where(pd.notnull(df), None).to_dict('records')
-                    st.session_state.data = new_rows
-                    save_data(new_rows)
-                    st.success(f"Nahráno {len(new_rows)} řádků.")
-                    st.rerun()
-                except Exception as e: st.error(f"Chyba: {e}")
-
-    with col_exp:
-        st.markdown("### 📤 Export")
-        if st.session_state.data:
-            # Převedeme aktuální data v paměti na CSV
-            df_export = pd.DataFrame(st.session_state.data)
-            csv_buffer = io.StringIO()
-            df_export.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
-            
-            st.write(f"Aktuální počet řádků: **{len(st.session_state.data)}**")
-            st.download_button(
-                label="💾 STÁHNOUT AKTUÁLNÍ DATA (CSV)",
-                data=csv_buffer.getvalue(),
-                file_name=f"tt_star_backup_{datetime.datetime.now().strftime('%d_%m_%H_%M')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        else:
-            st.warning("Žádná data k exportu.")
-
-    st.write("---")
-    if st.button("🧨 SMAZAT VŠECHNA DATA", use_container_width=True):
-        st.session_state.data = []
-        save_data([])
-        st.rerun()
+        up = st.file_uploader("Nahrát CSV", type=None)
+        if up and st.button("✅ POTVRDIT"):
+            try:
+                b = up.read()
+                try: t
