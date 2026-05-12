@@ -76,7 +76,20 @@ t1, t2, t3, t4 = st.tabs(["📥 Vkládání", "🔮 Predikce", "🏆 Žebříče
 
 with t1:
     st.subheader("Ruční vkládání zápasu")
+    
+    # Zobrazení úspěšného uložení, pokud existuje v session_state
+    if "success_msg" in st.session_state:
+        st.success(st.session_state.success_msg)
+        # Smažeme zprávu po dalším kliknutí, aby tam nestrašila navždy
+        del st.session_state.success_msg
+
     raw_in = st.text_area("Vlož text zápasu:", height=100, key="txt_area")
+    
+    # Tlačítko pro vymazání textu
+    if st.button("🗑️ VYMAZAT TEXT"):
+        st.session_state.txt_area = ""
+        st.rerun()
+
     m_first = st.selectbox("Kdo podával v 1. SETU?", ["Hráč 1 (Horní)", "Hráč 2 (Dolní)"])
     
     if st.button("🚀 ULOŽIT ZÁPAS"):
@@ -99,7 +112,10 @@ with t1:
                 
                 st.session_state.data.extend(temp_new_sets)
                 save_data(st.session_state.data)
-                st.success("Uloženo!")
+                
+                # Příprava pro zobrazení po restartu
+                st.session_state.txt_area = "" # Vyprázdnění pole
+                st.session_state.success_msg = f"✅ Zápas {p1_n} - {p2_n} byl úspěšně uložen!"
                 st.rerun()
             except Exception as e: st.error(f"Chyba: {e}")
 
