@@ -112,9 +112,7 @@ def get_ratings(data_list):
 
     sorted_data = sorted(
         data_list,
-        key=lambda x: str(
-            x.get('timestamp', '')
-        )
+        key=lambda x: str(x.get('timestamp', ''))
     )
 
     q = math.log(10) / 400
@@ -157,57 +155,24 @@ def get_ratings(data_list):
             rdB = ratings[pB]["rd"]
 
             gB = 1 / math.sqrt(
-                1 + 3 * (
-                    (q * rdB / math.pi) ** 2
-                )
+                1 + 3 * ((q * rdB / math.pi) ** 2)
             )
 
-            expA = 1 / (
-                1 + 10 ** (
-                    gB * (rA - rB) / -400
-                )
-            )
+            expA = 1 / (1 + 10 ** (gB * (rA - rB) / -400))
 
-            diff_weight = (
-                1 +
-                (
-                    min(abs(ptsA - ptsB), 8)
-                    / 12
-                )
-            )
+            diff_weight = 1 + (min(abs(ptsA - ptsB), 8) / 12)
 
-            d2 = 1 / (
-                q**2 *
-                gB**2 *
-                expA *
-                (1-expA)
-            )
+            d2 = 1 / (q**2 * gB**2 * expA * (1-expA))
 
             change = (
-                q /
-                (
-                    (1 / rdA**2) +
-                    (1 / d2)
-                )
+                q / ((1 / rdA**2) + (1 / d2))
             ) * gB * (actualA - expA)
 
-            ratings[pA]["r"] += (
-                change * diff_weight
-            )
+            ratings[pA]["r"] += change * diff_weight
+            ratings[pB]["r"] -= change * diff_weight
 
-            ratings[pB]["r"] -= (
-                change * diff_weight
-            )
-
-            ratings[pA]["rd"] = max(
-                35,
-                rdA * 0.97
-            )
-
-            ratings[pB]["rd"] = max(
-                35,
-                rdB * 0.97
-            )
+            ratings[pA]["rd"] = max(35, rdA * 0.97)
+            ratings[pB]["rd"] = max(35, rdB * 0.97)
 
             ratings[pA]["count"] += 1
             ratings[pB]["count"] += 1
@@ -236,29 +201,18 @@ def simulate_set_live(pA, startA, startB):
         if (a >= 11 or b >= 11) and abs(a - b) >= 2:
             return a, b
 
-# =====================================================
-# LIVE ENGINE
-# =====================================================
-
 def monte_carlo_live(pA, scoreA, scoreB, sims=3000):
 
     results = []
 
     for _ in range(sims):
-
         sa, sb = simulate_set_live(pA, scoreA, scoreB)
-
         results.append(f"{sa}:{sb}")
 
     c = Counter(results)
-
     total = sum(c.values())
 
     return {k: v/total for k, v in c.items()}
-
-# =====================================================
-# WIN PROBABILITY
-# =====================================================
 
 def calculate_live_probability(probs):
 
@@ -285,7 +239,7 @@ t1, t2, t3, t4 = st.tabs([
 ])
 
 # =====================================================
-# VKLÁDÁNÍ (FIXED DELETE BUTTON)
+# VKLÁDÁNÍ (FIXED DELETE)
 # =====================================================
 
 with t1:
@@ -295,7 +249,6 @@ with t1:
     if st.session_state.success_msg:
         st.success(st.session_state.success_msg)
 
-    # RESET KEY LOGIKA
     raw_in = st.text_area(
         "Vlož zápas:",
         height=120,
@@ -321,45 +274,32 @@ with t1:
                 try:
 
                     parts = raw_in.split('|')
-
                     names = parts[0].split('-')
 
                     p1 = normalize_name(names[0])
                     p2 = normalize_name(names[1])
 
-                    sets_raw = re.search(
-                        r'\((.*?)\)',
-                        parts[1]
-                    ).group(1)
+                    sets_raw = re.search(r'\((.*?)\)', parts[1]).group(1)
 
-                    sets = [
-                        s.strip()
-                        for s in sets_raw.split(',')
-                    ]
+                    sets = [s.strip() for s in sets_raw.split(',')]
 
                     for s in sets:
 
                         st.session_state.data.append({
-
                             "A": p1,
                             "B": p2,
                             "score": s.replace('-', ':'),
                             "timestamp": datetime.datetime.now().isoformat()
-
                         })
 
                     save_data(st.session_state.data)
 
-                    st.session_state.success_msg = (
-                        f"✅ {p1} vs {p2} uložen"
-                    )
-
+                    st.session_state.success_msg = f"✅ {p1} vs {p2} uložen"
                     st.session_state.txt_reset = not st.session_state.txt_reset
 
                     st.rerun()
 
                 except Exception as e:
-
                     st.error(e)
 
 # =====================================================
@@ -432,7 +372,7 @@ with t3:
         )
 
 # =====================================================
-# SPRÁVA
+# SPRÁVA (FIXED UPLOAD + EXPORT)
 # =====================================================
 
 with t4:
@@ -441,6 +381,36 @@ with t4:
 
     st.write(f"Počet setů: {len(st.session_state.data)}")
 
+    # ================= IMPORT (VRÁCENO ZPĚT) =================
+    up = st.file_uploader("📥 Import CSV", type=None)
+
+    if up:
+
+        try:
+
+            bytes_data = up.read()
+
+            try:
+                text_data = bytes_data.decode('utf-8-sig')
+            except:
+                text_data = bytes_data.decode('cp1250')
+
+            df = pd.read_csv(
+                io.StringIO(text_data),
+                sep=None,
+                engine='python'
+            )
+
+            st.session_state.data = df.where(pd.notnull(df), None).to_dict('records')
+
+            save_data(st.session_state.data)
+
+            st.success("✅ Import hotov")
+
+        except Exception as e:
+            st.error(e)
+
+    # ================= EXPORT =================
     if st.session_state.data:
 
         df_ex = pd.DataFrame(st.session_state.data)
