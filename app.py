@@ -8,9 +8,9 @@ import unicodedata
 import pandas as pd
 import io
 
-# =========================================================
+# =====================================================
 # KONFIGURACE
-# =========================================================
+# =====================================================
 
 DATA_FILE = "tt_star_ultra_v17.json"
 
@@ -20,9 +20,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# =========================================================
+# =====================================================
 # FUNKCE
-# =========================================================
+# =====================================================
 
 def normalize_name(name):
 
@@ -57,9 +57,9 @@ def save_data(data):
     st.cache_data.clear()
 
 
-# =========================================================
+# =====================================================
 # SESSION STATE
-# =========================================================
+# =====================================================
 
 if "data" not in st.session_state:
 
@@ -84,144 +84,60 @@ if "success_msg" not in st.session_state:
     st.session_state.success_msg = ""
 
 
-# =========================================================
-# GLICKO RATING
-# =========================================================
+# =====================================================
+# RATING SYSTÉM
+# =====================================================
 
 @st.cache_data(show_spinner="Přepočítávám žebříček...")
 def get_ratings(data_list):
 
     ratings = {}
 
-    BASE_R = 1500
-    BASE_RD = 350
-    BASE_VOL = 0.06
+    BASE_RATING = 1500
 
     if not data_list:
         return {}
 
-    sorted_data = sorted(
-        data_list,
-        key=lambda x: str(x.get('timestamp', ''))
-    )
-
-    q = math.log(10) / 400
-
-    for d in sorted_data:
-
-        pA = d.get('A')
-        pB = d.get('B')
-        score = d.get('score')
-
-        if not pA or not pB or ":" not in str(score):
-            continue
-
-        pA = normalize_name(pA)
-        pB = normalize_name(pB)
-
-        for p in [pA, pB]:
-
-            if p not in ratings:
-
-                ratings[p] = {
-                    "r": BASE_R,
-                    "rd": BASE_RD,
-                    "vol": BASE_VOL,
-                    "count": 0
-                }
+    for match in data_list:
 
         try:
 
-            ptsA, ptsB = map(
-                int,
-                str(score).split(':')
-            )
+            pA = normalize_name(match.get("A"))
+            pB = normalize_name(match.get("B"))
+            score = str(match.get("score"))
 
-            actual_winA = 1 if ptsA > ptsB else 0
+            if ":" not in score:
+                continue
 
-            win_weight = 1.0 + (
-                min(abs(ptsA - ptsB), 9) / 20.0
-            )
+            ptsA, ptsB = map(int, score.split(":"))
 
-            rA = ratings[pA]["r"]
-            rdA = ratings[pA]["rd"]
+            if pA not in ratings:
+                ratings[pA] = {
+                    "r": BASE_RATING,
+                    "count": 0
+                }
 
-            rB = ratings[pB]["r"]
-            rdB = ratings[pB]["rd"]
+            if pB not in ratings:
+                ratings[pB] = {
+                    "r": BASE_RATING,
+                    "count": 0
+                }
 
-            gB = 1 / math.sqrt(
-                1 + 3 * (q * rdB / math.pi) ** 2
-            )
+            diff = abs(ptsA - ptsB)
 
-            expA = 1 / (
-                1 + 10 ** (
-                    gB * (rA - rB) / -400
-                )
-            )
+            gain = 10 + diff
 
-            dA_inv = (
-                q ** 2 *
-                gB ** 2 *
-                expA *
-                (1 - expA)
-            )
+            if ptsA > ptsB:
 
-            ratings[pA]["r"] += (
-                (
-                    q / (
-                        1 / rdA ** 2 + dA_inv
-                    )
-                )
-                * gB
-                * (actual_winA - expA)
-                * win_weight
-            )
+                ratings[pA]["r"] += gain
+                ratings[pB]["r"] -= gain
 
-            ratings[pA]["rd"] = max(
-                30,
-                math.sqrt(
-                    1 / (
-                        1 / rdA ** 2 + dA_inv
-                    )
-                )
-            )
+            else:
+
+                ratings[pB]["r"] += gain
+                ratings[pA]["r"] -= gain
 
             ratings[pA]["count"] += 1
-
-            gA = 1 / math.sqrt(
-                1 + 3 * (q * rdA / math.pi) ** 2
-            )
-
-            dB_inv = (
-                q ** 2 *
-                gA ** 2 *
-                expA *
-                (1 - expA)
-            )
-
-            ratings[pB]["r"] += (
-                (
-                    q / (
-                        1 / rdB ** 2 + dB_inv
-                    )
-                )
-                * gA
-                * (
-                    (1 - actual_winA)
-                    - (1 - expA)
-                )
-                * win_weight
-            )
-
-            ratings[pB]["rd"] = max(
-                30,
-                math.sqrt(
-                    1 / (
-                        1 / rdB ** 2 + dB_inv
-                    )
-                )
-            )
-
             ratings[pB]["count"] += 1
 
         except:
@@ -230,9 +146,9 @@ def get_ratings(data_list):
     return ratings
 
 
-# =========================================================
+# =====================================================
 # TABS
-# =========================================================
+# =====================================================
 
 t1, t2, t3, t4 = st.tabs([
     "📥 Vkládání",
@@ -241,9 +157,9 @@ t1, t2, t3, t4 = st.tabs([
     "⚙️ Správa"
 ])
 
-# =========================================================
+# =====================================================
 # VKLÁDÁNÍ
-# =========================================================
+# =====================================================
 
 with t1:
 
@@ -258,9 +174,9 @@ with t1:
         key="txt_area"
     )
 
-    col1, col2 = st.columns(2)
+    c1, c2 = st.columns(2)
 
-    with col1:
+    with c1:
 
         if st.button("🗑️ VYMAZAT TEXT"):
 
@@ -275,7 +191,7 @@ with t1:
         ]
     )
 
-    with col2:
+    with c2:
 
         if st.button("🚀 ULOŽIT ZÁPAS"):
 
@@ -312,13 +228,9 @@ with t1:
                         o1 = "0"
                         o2 = "0"
 
-                    ts = (
-                        parts[2].strip()
-                        if len(parts) > 2
-                        else datetime.datetime.now().strftime("%d.%m. %H:%M")
-                    )
+                    ts = datetime.datetime.now().strftime("%d.%m. %H:%M")
 
-                    temp_new_sets = []
+                    temp_matches = []
 
                     for i, s in enumerate(sets):
 
@@ -338,9 +250,12 @@ with t1:
                                 else "A"
                             )
 
-                        clean_score = s.strip().replace('-', ':')
+                        clean_score = (
+                            s.strip()
+                            .replace("-", ":")
+                        )
 
-                        temp_new_sets.append({
+                        temp_matches.append({
                             "A": p1_n,
                             "B": p2_n,
                             "score": clean_score,
@@ -349,14 +264,14 @@ with t1:
                             "odds": f"{o1}/{o2}"
                         })
 
-                    st.session_state.data.extend(temp_new_sets)
+                    st.session_state.data.extend(temp_matches)
 
                     save_data(st.session_state.data)
 
                     st.session_state.txt_area = ""
 
                     st.session_state.success_msg = (
-                        f"✅ Zápas {p1_n} - {p2_n} byl úspěšně uložen!"
+                        f"✅ Zápas {p1_n} vs {p2_n} uložen"
                     )
 
                     st.rerun()
@@ -366,9 +281,9 @@ with t1:
                     st.error(f"Chyba: {e}")
 
 
-# =========================================================
+# =====================================================
 # PREDIKCE
-# =========================================================
+# =====================================================
 
 with t2:
 
@@ -376,115 +291,69 @@ with t2:
 
     if ratings:
 
-        player_list = sorted(list(ratings.keys()))
+        players = sorted(ratings.keys())
 
         c1, c2 = st.columns(2)
 
         selA = c1.selectbox(
             "Hráč A",
-            player_list,
-            key="sA"
+            players
         )
 
         selB = c2.selectbox(
             "Hráč B",
-            player_list,
-            index=min(1, len(player_list) - 1),
-            key="sB"
-        )
-
-        co1, co2, co3 = st.columns(3)
-
-        co1.number_input(
-            f"Kurz {selA}",
-            1.01,
-            20.0,
-            1.85
-        )
-
-        co2.number_input(
-            f"Kurz {selB}",
-            1.01,
-            20.0,
-            1.85
-        )
-
-        live_s = co3.radio(
-            "Kdo začíná podávat (Live):",
-            [selA, selB]
+            players,
+            index=min(1, len(players)-1)
         )
 
         if selA != selB:
 
-            rA = ratings[selA]
-            rB = ratings[selB]
+            rA = ratings[selA]["r"]
+            rB = ratings[selB]["r"]
 
-            q = math.log(10) / 400
+            total = rA + rB
 
-            rd_c = math.sqrt(
-                rA["rd"] ** 2 +
-                rB["rd"] ** 2
-            )
+            probA = rA / total
+            probB = rB / total
 
-            g = 1 / math.sqrt(
-                1 + 3 * (q * rd_c / math.pi) ** 2
-            )
+            winner = selA if probA > probB else selB
 
-            p_base = 1 / (
-                1 + 10 ** (
-                    g * (rA["r"] - rB["r"]) / -400
-                )
-            )
-
-            p_set = min(
-                max(
-                    p_base + (
-                        0.05 if live_s == selA else -0.05
-                    ),
-                    0.05
-                ),
-                0.95
-            )
-
-            sc = {
-                "3:0": p_set ** 3,
-                "3:1": 3 * (p_set ** 3) * (1 - p_set),
-                "3:2": 6 * (p_set ** 3) * ((1 - p_set) ** 2),
-                "0:3": (1 - p_set) ** 3,
-                "1:3": 3 * ((1 - p_set) ** 3) * p_set,
-                "2:3": 6 * ((1 - p_set) ** 3) * (p_set ** 2)
-            }
-
-            probA = (
-                sc["3:0"] +
-                sc["3:1"] +
-                sc["3:2"]
-            )
-
-            probB = 1 - probA
-
-            best_res = max(sc, key=sc.get)
+            percent = max(probA, probB) * 100
 
             st.markdown(
-                f"## 🏆 Vítěz: "
-                f"**{selA if probA > probB else selB}** "
-                f"({max(probA, probB) * 100:.1f}%)"
+                f"## 🏆 Predikovaný vítěz: **{winner}**"
             )
 
-            st.subheader(
-                f"📊 Nejpravděpodobnější výsledek: {best_res}"
+            st.markdown(
+                f"### Pravděpodobnost výhry: {percent:.1f}%"
+            )
+
+            st.write("---")
+
+            st.metric(
+                f"Síla {selA}",
+                int(rA)
+            )
+
+            st.metric(
+                f"Síla {selB}",
+                int(rB)
             )
 
             st.info(
-                f"Férové kurzy -> "
-                f"{selA}: {1 / probA:.2f} | "
-                f"{selB}: {1 / probB:.2f}"
+                f"Férové kurzy → "
+                f"{selA}: {1/probA:.2f} | "
+                f"{selB}: {1/probB:.2f}"
             )
 
+    else:
 
-# =========================================================
+        st.info("Zatím nejsou vložená data.")
+
+
+# =====================================================
 # ŽEBŘÍČEK
-# =========================================================
+# =====================================================
 
 with t3:
 
@@ -492,32 +361,45 @@ with t3:
 
     if ratings:
 
-        df_view = pd.DataFrame([
-            {
-                "Hráč": k,
-                "Rating": int(v["r"]),
-                "Zápasů": v["count"]
-            }
-            for k, v in ratings.items()
-        ])
+        table = []
+
+        for player, values in ratings.items():
+
+            table.append({
+                "Hráč": player,
+                "Rating": int(values["r"]),
+                "Zápasů": values["count"]
+            })
+
+        df = pd.DataFrame(table)
+
+        df = df.sort_values(
+            "Rating",
+            ascending=False
+        )
 
         st.dataframe(
-            df_view.sort_values(
-                "Rating",
-                ascending=False
-            ),
+            df,
             use_container_width=True,
             hide_index=True
         )
 
+    else:
 
-# =========================================================
+        st.info("Zatím nejsou vložená data.")
+
+
+# =====================================================
 # SPRÁVA
-# =========================================================
+# =====================================================
 
 with t4:
 
     st.subheader("⚙️ Správa, Import a Export")
+
+    # =================================================
+    # POSLEDNÍCH 5 ZÁPASŮ
+    # =================================================
 
     st.markdown("## 🕒 Posledních 5 vložených zápasů")
 
@@ -525,7 +407,7 @@ with t4:
 
         last_matches = st.session_state.data[-5:]
 
-        last_matches = list(reversed(last_matches))
+        last_matches.reverse()
 
         df_last = pd.DataFrame(last_matches)
 
@@ -537,18 +419,22 @@ with t4:
 
     else:
 
-        st.info("Zatím nejsou vložené žádné zápasy.")
+        st.info("Žádné zápasy.")
 
     st.write("---")
 
     c_i, c_e = st.columns(2)
+
+    # =================================================
+    # IMPORT
+    # =================================================
 
     with c_i:
 
         st.markdown("### 📥 Import")
 
         up = st.file_uploader(
-            "Nahrát soubor (CSV)",
+            "Nahrát CSV",
             type=None
         )
 
@@ -593,13 +479,17 @@ with t4:
 
                 save_data(st.session_state.data)
 
-                st.success("Data byla úspěšně nahrána!")
+                st.success("Import dokončen")
 
                 st.rerun()
 
             except Exception as e:
 
-                st.error(f"Chyba při importu: {e}")
+                st.error(f"Chyba importu: {e}")
+
+    # =================================================
+    # EXPORT
+    # =================================================
 
     with c_e:
 
@@ -607,24 +497,30 @@ with t4:
 
         if st.session_state.data:
 
-            df_ex = pd.DataFrame(st.session_state.data)
+            df_ex = pd.DataFrame(
+                st.session_state.data
+            )
 
-            csv_b = io.StringIO()
+            csv_buffer = io.StringIO()
 
             df_ex.to_csv(
-                csv_b,
+                csv_buffer,
                 index=False,
                 encoding='utf-8-sig'
             )
 
             st.download_button(
-                "💾 STÁHNOUT ZÁLOHU (CSV)",
-                data=csv_b.getvalue(),
+                "💾 STÁHNOUT CSV",
+                data=csv_buffer.getvalue(),
                 file_name=f"tt_star_backup_{datetime.datetime.now().strftime('%d_%m')}.csv",
                 use_container_width=True
             )
 
     st.write("---")
+
+    # =================================================
+    # SMAZÁNÍ
+    # =================================================
 
     if st.button(
         "🧨 SMAZAT VŠECHNA DATA",
